@@ -1,0 +1,85 @@
+# Sample llm_endpoints.yaml. Copy to your project root as llm_endpoints.yaml and edit.
+#
+# All providers below route through the same OpenAI-compatible adapter in 0.1.0.
+# The Anthropic native adapter ships in a later minor release.
+
+defaults:
+  timeout_seconds: 60
+  max_retries: 3
+  retry_backoff_factor: 2.0
+
+endpoints:
+
+  # Local Ollama. No real API key needed; any non-empty string works for OLLAMA_API_KEY.
+  # The model below (qwen2.5vl:3b) is what examples/smoke_test_ollama.py was verified against.
+  # Substitute whatever you have pulled via `ollama pull <model>`.
+  local-llama:
+    provider: local-openai-compat
+    model: qwen2.5vl:3b
+    api_key_env: OLLAMA_API_KEY
+    base_url: http://localhost:11434/v1
+    context_window: 32768
+
+  # Route to deepseek/deepseek-chat model via OpenRouter
+  openrouter-deepseek:
+    provider: openrouter
+    model: deepseek/deepseek-chat
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+
+  # Route to xiaomi/mimo-v2-flash model via OpenRouter
+  openrouter-mimo-v2-flash:
+    provider: openrouter
+    model: xiaomi/mimo-v2-flash
+    api_key_env: OPENROUTER_API_KEY
+    context_window: 262144  # https://huggingface.co/XiaomiMiMo/MiMo-V2-Flash/raw/main/config.json
+    base_url: https://openrouter.ai/api/v1
+
+  # Route to openai/gpt-4.1-nano model via OpenRouter
+  openrouter-gpt-4.1-nano:
+    provider: openrouter
+    model: openai/gpt-4.1-nano
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+
+  # DeepSeek direct API. Cheaper than via the
+  # aggregator; requires a DeepSeek account.
+  deepseek-direct:
+    provider: deepseek
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com
+    region: cn-hangzhou
+    cost:
+      input_per_1m: 0.28
+      output_per_1m: 1.12
+      pricing_url: https://api-docs.deepseek.com/quick_start/pricing
+      pricing_checked: 2026-05-01
+
+  # Qwen direct API (Alibaba Cloud DashScope).
+  qwen-direct:
+    provider: qwen
+    model: qwen-plus
+    api_key_env: QWEN_API_KEY
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    region: cn-hangzhou
+
+  # OpenAI direct.
+  openai-gpt-4.1-nano:
+    provider: openai
+    model: gpt-4.1-nano
+    api_key_env: OPENAI_API_KEY
+
+  # Anthropic direct. Uncomment after the native AnthropicAdapter ships in a future minor release.
+  # anthropic-claude-sonnet:
+  #   provider: anthropic
+  #   model: claude-sonnet-4-5
+  #   api_key_env: ANTHROPIC_API_KEY
+
+# Role mappings group endpoints by purpose so scripts can call
+# get_role_endpoints(project, role) instead of hard-coding names.
+roles:
+  default:
+    quick: local-llama
+    capable: openrouter-gpt-4.1-nano
+    cheap: deepseek-direct

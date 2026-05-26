@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-router-ledger"
+version = "0.1.1"
+description = "Route LLM calls (OpenAI-compatible providers and local Ollama) and keep a JSONL ledger of every request and response for offline cost reconciliation."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Nirmalya Ghosh", email = "1637161+nirmalyaghosh@users.noreply.github.com" },
+]
+keywords = [
+    "ledger",
+    "llm",
+    "openai",
+    "openrouter",
+    "router",
+    "tracking",
+    "usage",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "openai>=1.55.0",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "twine>=5.0",
+    "types-pyyaml",
+]
+
+[project.urls]
+Homepage = "https://github.com/nirmalyaghosh/llm-router-ledger"
+Issues = "https://github.com/nirmalyaghosh/llm-router-ledger/issues"
+
+[project.scripts]
+llm-router-ledger = "llm_router_ledger.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/llm_router_ledger"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/llm_router_ledger"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: opt-in tests that hit real provider APIs (require API keys; skipped if env unset)",
+]
