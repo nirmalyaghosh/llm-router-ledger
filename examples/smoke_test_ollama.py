@@ -36,25 +36,28 @@ from importlib.metadata import (
 )
 from pathlib import Path
 
-from llm_router_ledger import (
-    send_message,
-    UsageTracker,
-)
-
-
-logger = logging.getLogger(__name__)
-
 try:
     _LIBRARY_VERSION = version("llm-router-ledger")
 except PackageNotFoundError:
     _LIBRARY_VERSION = "0.0.0+local"
 
+# Set env defaults before importing the library: load_dotenv() runs at
+# library import time, after which any value already in .env wins over a
+# later os.environ.setdefault() call.
 os.environ.setdefault("OLLAMA_API_KEY", "ollama")
 os.environ.setdefault("LRL_RUN_TAG", "smoke")
 os.environ.setdefault(
     "LRL_RUN_LABEL",
     f"{_LIBRARY_VERSION}-ollama-verify-{datetime.date.today().isoformat()}",
 )
+
+from llm_router_ledger import (  # noqa: E402
+    send_message,
+    UsageTracker,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
