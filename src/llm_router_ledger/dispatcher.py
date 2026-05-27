@@ -118,6 +118,7 @@ def send_message(
             system_prompt=system or "",
             user_prompt=user,
             purpose=purpose,
+            provider=ep.provider,
             metadata=metadata,
         )
 
@@ -142,6 +143,7 @@ def send_message(
             usage=usage,
             generation_id=generation_id,
             purpose=purpose,
+            provider=ep.provider,
             metadata=metadata,
         )
 

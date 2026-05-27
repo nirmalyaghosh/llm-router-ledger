@@ -195,12 +195,17 @@ class UsageTracker:
         system_prompt: str,
         user_prompt: str,
         purpose: str | None = None,
+        provider: str = "",
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """
         Write an llm_request event. Returns the request_id (run_id +
         zero-padded counter) so the caller can pair it with the
         corresponding response.
+
+        provider is the EndpointConfig.provider value (e.g. "ollama",
+        "openrouter", "azure"). Recorded verbatim so consumers can group
+        ledger entries by which server produced the tokens.
         """
         self._counter += 1
         width = self._counter_width
@@ -234,6 +239,8 @@ class UsageTracker:
                 user_prompt,
             ),
         }
+        if provider:
+            entry["provider"] = provider
         if metadata:
             entry["metadata"] = metadata
         self._write_entry(entry)
@@ -248,6 +255,7 @@ class UsageTracker:
         usage: dict[str, Any],
         generation_id: str = "",
         purpose: str | None = None,
+        provider: str = "",
         usage_details: (
             dict[str, Any] | None
         ) = None,
@@ -257,6 +265,9 @@ class UsageTracker:
         Write an llm_response event. The generation_id is auto-routed to
         the "generation_id" key when prefixed "gen-" (OpenRouter
         convention), otherwise to "provider_response_id".
+
+        provider mirrors the value passed to the paired log_request call
+        and identifies the server that produced the tokens.
         """
         id_key = (
             "generation_id"
@@ -309,6 +320,8 @@ class UsageTracker:
                 "total_tokens": total_tokens,
             },
         }
+        if provider:
+            entry["provider"] = provider
         if usage_details:
             entry["usage_details"] = (
                 usage_details

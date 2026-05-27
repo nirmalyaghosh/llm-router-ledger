@@ -81,6 +81,53 @@ def test_send_message_anthropic_raises_not_implemented(
         )
 
 
+def test_send_message_azure_dispatches_to_openai_compat(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Calling send_message against an azure endpoint dispatches through
+    the gate and reaches the OpenAI-compatible adapter.
+    """
+    yaml_text = (
+        "endpoints:\n"
+        "  azure-test:\n"
+        "    provider: azure\n"
+        "    model: gpt-4.1-nano\n"
+        "    api_key_env: AZURE_OPENAI_API_KEY\n"
+        "    base_url: https://example.openai.azure.com/openai/v1/\n"
+    )
+    p = tmp_path / "with_azure.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
+    monkeypatch.setattr(
+        "llm_router_ledger.dispatcher.get_client",
+        lambda **kw: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "llm_router_ledger.providers.openai_compat."
+        "OpenAICompatAdapter.send",
+        lambda self, **kw: (
+            "ok",
+            {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+            "gen-test",
+        ),
+    )
+    config = load_config(p)
+    text, usage, gen = send_message(
+        endpoint_name="azure-test",
+        system="s",
+        user="u",
+        config=config,
+    )
+    assert text == "ok"
+    assert gen == "gen-test"
+
+
 def test_send_message_invokes_adapter_with_kwargs(
     monkeypatch: pytest.MonkeyPatch,
     sample_yaml_file: Path,
@@ -219,6 +266,38 @@ def test_send_message_logs_paired_events(
     ]
     events = [e["event"] for e in entries]
     assert events == ["llm_request", "llm_response"]
+
+
+def test_send_message_logs_provider_from_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    With a tracker, the EndpointConfig.provider value reaches both the
+    llm_request and llm_response entries in the JSONL log.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(monkeypatch)
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    send_message(
+        endpoint_name="ollama-local",
+        system="sys",
+        user="usr",
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    providers = [e["provider"] for e in entries]
+    assert providers == [
+        "local-openai-compat",
+        "local-openai-compat",
+    ]
 
 
 def test_send_message_no_tracker_writes_nothing(

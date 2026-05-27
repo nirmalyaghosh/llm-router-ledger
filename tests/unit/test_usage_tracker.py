@@ -247,6 +247,68 @@ def test_log_response_token_normalisation_input_output(
     assert u["total_tokens"] == 30
 
 
+def test_provider_field_omitted_when_empty(tmp_log_path: Path) -> None:
+    """
+    When provider is left as the default empty string, neither
+    llm_request nor llm_response writes a "provider" key (matches the
+    metadata / usage_details pattern for optional fields).
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="hi",
+        usage={
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert len(entries) == 2
+    assert "provider" not in entries[0]
+    assert "provider" not in entries[1]
+
+
+def test_provider_field_round_trips(tmp_log_path: Path) -> None:
+    """
+    log_request and log_response both write a "provider" field carrying
+    the value passed by the caller, so ledger entries can be grouped by
+    which server produced the tokens.
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+        provider="ollama",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="hi",
+        usage={
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+        provider="ollama",
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert len(entries) == 2
+    assert entries[0]["event"] == "llm_request"
+    assert entries[0]["provider"] == "ollama"
+    assert entries[1]["event"] == "llm_response"
+    assert entries[1]["provider"] == "ollama"
+
+
 def test_request_id_increments(tmp_log_path: Path) -> None:
     """
     Successive log_request calls bump the counter and reuse the same
