@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-router-ledger"
-version = "0.1.1"
-description = "Route LLM calls (OpenAI-compatible providers and local Ollama) and keep a JSONL ledger of every request and response for offline cost reconciliation."
+version = "0.1.2"
+description = "Route LLM calls through one send_message() across OpenAI-compatible providers and Anthropic's native Messages API; keep a JSONL ledger of every request and response for offline cost reconciliation."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
@@ -13,16 +13,22 @@ authors = [
     { name = "Nirmalya Ghosh", email = "1637161+nirmalyaghosh@users.noreply.github.com" },
 ]
 keywords = [
+    "anthropic",
+    "azure",
+    "deepseek",
     "ledger",
     "llm",
+    "minimax",
+    "ollama",
     "openai",
     "openrouter",
     "router",
     "tracking",
     "usage",
+    "zhipu",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -38,12 +44,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+anthropic = ["anthropic>=0.30"]
 dev = [
+    "anthropic>=0.30",
     "mypy>=1.10",
     "pytest>=8.0",
     "ruff>=0.5",
     "twine>=5.0",
-    "types-pyyaml",
+    "types-pyyaml>=6.0",
 ]
 
 [project.urls]

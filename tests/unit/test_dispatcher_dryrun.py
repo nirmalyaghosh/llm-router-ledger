@@ -52,82 +52,6 @@ def _patch_adapter(
     return fake
 
 
-def test_send_message_anthropic_raises_not_implemented(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """
-    Calling send_message against an anthropic endpoint raises
-    NotImplementedError until the native adapter ships in a later minor
-    release.
-    """
-    yaml_text = (
-        "endpoints:\n"
-        "  anthropic-claude:\n"
-        "    provider: anthropic\n"
-        "    model: claude-sonnet\n"
-        "    api_key_env: ANTHROPIC_API_KEY\n"
-    )
-    p = tmp_path / "with_anthropic.yaml"
-    p.write_text(yaml_text, encoding="utf-8")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
-    config = load_config(p)
-    with pytest.raises(NotImplementedError):
-        send_message(
-            endpoint_name="anthropic-claude",
-            system="s",
-            user="u",
-            config=config,
-        )
-
-
-def test_send_message_azure_dispatches_to_openai_compat(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """
-    Calling send_message against an azure endpoint dispatches through
-    the gate and reaches the OpenAI-compatible adapter.
-    """
-    yaml_text = (
-        "endpoints:\n"
-        "  azure-test:\n"
-        "    provider: azure\n"
-        "    model: gpt-4.1-nano\n"
-        "    api_key_env: AZURE_OPENAI_API_KEY\n"
-        "    base_url: https://example.openai.azure.com/openai/v1/\n"
-    )
-    p = tmp_path / "with_azure.yaml"
-    p.write_text(yaml_text, encoding="utf-8")
-    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "x")
-    monkeypatch.setattr(
-        "llm_router_ledger.dispatcher.get_client",
-        lambda **kw: MagicMock(),
-    )
-    monkeypatch.setattr(
-        "llm_router_ledger.providers.openai_compat."
-        "OpenAICompatAdapter.send",
-        lambda self, **kw: (
-            "ok",
-            {
-                "prompt_tokens": 1,
-                "completion_tokens": 1,
-                "total_tokens": 2,
-            },
-            "gen-test",
-        ),
-    )
-    config = load_config(p)
-    text, usage, gen = send_message(
-        endpoint_name="azure-test",
-        system="s",
-        user="u",
-        config=config,
-    )
-    assert text == "ok"
-    assert gen == "gen-test"
-
-
 def test_send_message_invokes_adapter_with_kwargs(
     monkeypatch: pytest.MonkeyPatch,
     sample_yaml_file: Path,
@@ -215,6 +139,177 @@ def test_send_message_forwards_user_id_and_extra_body(
     kwargs = fake.send.call_args.kwargs
     assert kwargs["user_id"] == "run-2026-05-22"
     assert kwargs["extra_body"] == {"provider": {"sort": "latency"}}
+
+
+def test_send_message_anthropic_dispatches_to_native_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Calling send_message against an anthropic endpoint dispatches
+    through the gate and reaches the native AnthropicAdapter (not the
+    OpenAI-compatible adapter), since Anthropic's Messages API has a
+    different request/response shape.
+    """
+    yaml_text = (
+        "endpoints:\n"
+        "  anthropic-test:\n"
+        "    provider: anthropic\n"
+        "    model: claude-haiku-4-5\n"
+        "    api_key_env: ANTHROPIC_API_KEY\n"
+    )
+    p = tmp_path / "with_anthropic.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")
+    monkeypatch.setattr(
+        "llm_router_ledger.dispatcher.get_client",
+        lambda **kw: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "llm_router_ledger.providers.anthropic_native."
+        "AnthropicAdapter.send",
+        lambda self, **kw: (
+            "ok",
+            {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+            "msg_test",
+        ),
+    )
+    config = load_config(p)
+    text, usage, gen = send_message(
+        endpoint_name="anthropic-test",
+        system="s",
+        user="u",
+        config=config,
+    )
+    assert text == "ok"
+    assert gen == "msg_test"
+
+
+@pytest.mark.parametrize(
+    "provider,model,api_key_env,base_url,mock_gen_id",
+    [
+        # Azure OpenAI v1 endpoint is OpenAI-compatible; deployment
+        # name carried in model field.
+        (
+            "azure",
+            "gpt-4.1-nano",
+            "AZURE_OPENAI_API_KEY",
+            "https://example.openai.azure.com/openai/v1/",
+            "chatcmpl-test",
+        ),
+        # DeepSeek API is OpenAI-compatible.
+        (
+            "deepseek",
+            "deepseek-chat",
+            "DEEPSEEK_API_KEY",
+            "https://api.deepseek.com/v1",
+            "chatcmpl-test",
+        ),
+        # MiniMax text API is OpenAI-compatible.
+        (
+            "minimax",
+            "MiniMax-M2.5",
+            "MINIMAX_API_KEY",
+            "https://api.minimax.io/v1",
+            "chatcmpl-test",
+        ),
+        # Ollama speaks the OpenAI chat API locally; uses gen-* style id.
+        (
+            "ollama",
+            "llama3.1",
+            "OLLAMA_API_KEY",
+            "http://localhost:11434/v1",
+            "gen-test",
+        ),
+        # OpenAI direct: no base_url override needed (SDK default).
+        (
+            "openai",
+            "gpt-4.1-nano",
+            "OPENAI_API_KEY",
+            None,
+            "chatcmpl-test",
+        ),
+        # Qwen via Alibaba DashScope is OpenAI-compatible.
+        (
+            "qwen",
+            "qwen-plus",
+            "QWEN_API_KEY",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "chatcmpl-test",
+        ),
+        # Z.AI / Zhipu GLM family is OpenAI-compatible.
+        (
+            "zhipu",
+            "glm-4.7-flash",
+            "ZHIPU_API_KEY",
+            "https://api.z.ai/api/paas/v4/",
+            "chatcmpl-test",
+        ),
+    ],
+    ids=["azure", "deepseek", "minimax", "ollama", "openai", "qwen", "zhipu"],
+)
+def test_send_message_dispatches_to_openai_compat(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    provider: str,
+    model: str,
+    api_key_env: str,
+    base_url: str | None,
+    mock_gen_id: str,
+) -> None:
+    """
+    Every verified OpenAI-compatible provider dispatches through the
+    gate and reaches the shared OpenAICompatAdapter, returning the
+    adapter's response unchanged. The gen_id varies per provider to
+    cover both the gen-* (OpenRouter convention) and provider-native
+    (chatcmpl-*) routing paths exercised by UsageTracker.
+    """
+    base_url_line = (
+        f"    base_url: {base_url}\n"
+        if base_url
+        else ""
+    )
+    yaml_text = (
+        "endpoints:\n"
+        f"  {provider}-test:\n"
+        f"    provider: {provider}\n"
+        f"    model: {model}\n"
+        f"    api_key_env: {api_key_env}\n"
+        f"{base_url_line}"
+    )
+    p = tmp_path / f"with_{provider}.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    monkeypatch.setenv(api_key_env, "x")
+    monkeypatch.setattr(
+        "llm_router_ledger.dispatcher.get_client",
+        lambda **kw: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "llm_router_ledger.providers.openai_compat."
+        "OpenAICompatAdapter.send",
+        lambda self, **kw: (
+            "ok",
+            {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2,
+            },
+            mock_gen_id,
+        ),
+    )
+    config = load_config(p)
+    text, usage, gen = send_message(
+        endpoint_name=f"{provider}-test",
+        system="s",
+        user="u",
+        config=config,
+    )
+    assert text == "ok"
+    assert gen == mock_gen_id
 
 
 def test_send_message_omits_user_id_and_extra_body_by_default(

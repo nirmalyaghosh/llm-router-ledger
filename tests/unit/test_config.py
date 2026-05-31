@@ -218,3 +218,33 @@ def test_load_config_returns_typed_objects(
     ep = config.endpoints["ollama-local"]
     assert ep.provider == "local-openai-compat"
     assert ep.context_window == 8192
+
+
+def test_local_openai_compat_emits_deprecation_warning(
+    tmp_path: Path,
+) -> None:
+    """
+    Loading a YAML with provider: local-openai-compat emits a
+    DeprecationWarning pointing at the specific replacement options
+    (e.g. ollama). The endpoint still loads successfully so existing
+    configs keep working until 0.2.0 removes the alias.
+    """
+    yaml_text = (
+        "endpoints:\n"
+        "  legacy-local:\n"
+        "    provider: local-openai-compat\n"
+        "    model: llama3.1\n"
+        "    api_key_env: OLLAMA_API_KEY\n"
+        "    base_url: http://localhost:11434/v1\n"
+    )
+    p = tmp_path / "with_legacy.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    with pytest.warns(
+        DeprecationWarning,
+        match="local-openai-compat",
+    ):
+        config = load_config(p)
+    assert (
+        config.endpoints["legacy-local"].provider
+        == "local-openai-compat"
+    )

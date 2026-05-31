@@ -19,8 +19,7 @@ setup.
 from __future__ import annotations
 
 import os
-
-import yaml
+import warnings
 
 from datetime import date
 from pathlib import Path
@@ -28,6 +27,8 @@ from typing import (
     Any,
     Literal,
 )
+
+import yaml
 
 from dotenv import load_dotenv
 from pydantic import (
@@ -51,6 +52,7 @@ ProviderName = Literal[
     "gemini",
     "local-openai-compat",
     "minimax",
+    "ollama",
     "openai",
     "openrouter",
     "qwen",
@@ -76,7 +78,9 @@ class CostConfig(BaseModel):
 
     @property
     def days_since_checked(self) -> int | None:
-        """Days since pricing was last verified. None if never checked."""
+        """
+        Days since pricing was last verified. None if never checked.
+        """
         if self.pricing_checked is None:
             return None
         return (
@@ -89,7 +93,9 @@ class CostConfig(BaseModel):
         output_tokens: int,
         cache_hit: bool = False,
     ) -> float:
-        """Estimate cost in USD for a single request."""
+        """
+        Estimate cost in USD for a single request.
+        """
         if (
             cache_hit
             and self.cache_hit_input_per_1m
@@ -106,7 +112,9 @@ class CostConfig(BaseModel):
 
 
 class DefaultsConfig(BaseModel):
-    """Default values inherited by all endpoints."""
+    """
+    Default values inherited by all endpoints.
+    """
 
     timeout_seconds: int = 60
     max_retries: int = 3
@@ -114,7 +122,9 @@ class DefaultsConfig(BaseModel):
 
 
 class EndpointConfig(BaseModel):
-    """Single LLM endpoint definition."""
+    """
+    Single LLM endpoint definition.
+    """
 
     name: str = ""
     provider: ProviderName
@@ -125,9 +135,6 @@ class EndpointConfig(BaseModel):
     context_window: int | None = None
     cost: CostConfig | None = None
     notes: str | None = None
-
-    azure_deployment: str | None = None
-    azure_api_version: str | None = None
 
     timeout_seconds: int = 60
     max_retries: int = 3
@@ -151,14 +158,18 @@ class EndpointConfig(BaseModel):
 
     @property
     def api_key_available(self) -> bool:
-        """Check if API key is set without raising."""
+        """
+        Check if API key is set without raising.
+        """
         return bool(
             os.environ.get(self.api_key_env)
         )
 
 
 class LLMConfig(BaseModel):
-    """Top-level config: all endpoints plus role mappings."""
+    """
+    Top-level config: all endpoints plus role mappings.
+    """
 
     defaults: DefaultsConfig = Field(
         default_factory=DefaultsConfig,
@@ -171,7 +182,9 @@ class LLMConfig(BaseModel):
     )
 
     def available(self) -> list[EndpointConfig]:
-        """Return endpoints whose API keys are actually set."""
+        """
+        Return endpoints whose API keys are actually set.
+        """
         return [
             ep
             for ep in self.endpoints.values()
@@ -298,6 +311,16 @@ def load_config(path: str | Path | None = None) -> LLMConfig:
             ),
             **ep_data,
         }
+        if merged.get("provider") == "local-openai-compat":
+            warnings.warn(
+                f"Endpoint '{name}': provider"
+                " 'local-openai-compat' is deprecated and"
+                " will be removed in 0.2.0. Use a specific"
+                " local-server provider name instead"
+                " (e.g. 'ollama').",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         endpoints[name] = EndpointConfig(
             **merged,
         )

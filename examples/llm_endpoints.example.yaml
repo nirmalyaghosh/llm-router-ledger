@@ -1,7 +1,7 @@
 # Sample llm_endpoints.yaml. Copy to your project root as llm_endpoints.yaml and edit.
 #
-# All providers below route through the same OpenAI-compatible adapter in 0.1.0.
-# The Anthropic native adapter ships in a later minor release.
+# Most providers below route through the shared OpenAI-compatible adapter.
+# `provider: anthropic` uses the native Anthropic Messages API adapter.
 
 defaults:
   timeout_seconds: 60
@@ -9,6 +9,28 @@ defaults:
   retry_backoff_factor: 2.0
 
 endpoints:
+  # Azure OpenAI v1
+  # The `model` field is the Azure deployment name, not a model name.
+  # Replace <your-resource-name> with your actual Azure resource.
+  azure-gpt-4.1-nano:
+    provider: azure
+    model: gpt-4.1-nano  # Refer to the Azure deployment name
+    api_key_env: AZURE_OPENAI_API_KEY
+    base_url: https://<your-resource-name>.openai.azure.com/openai/v1/
+
+  # DeepSeek direct API. Cheaper than via the
+  # aggregator; requires a DeepSeek account.
+  deepseek-direct:
+    provider: deepseek
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    base_url: https://api.deepseek.com/v1
+    region: cn-hangzhou
+    cost:
+      input_per_1m: 0.28
+      output_per_1m: 1.12
+      pricing_url: https://api-docs.deepseek.com/quick_start/pricing
+      pricing_checked: 2026-05-01
 
   # Local Ollama. No real API key needed; any non-empty string works for OLLAMA_API_KEY.
   # The model below (qwen2.5vl:3b) is what examples/smoke_test_ollama.py was verified against.
@@ -20,19 +42,47 @@ endpoints:
     base_url: http://localhost:11434/v1
     context_window: 32768
 
+  # MiniMax direct API. OpenAI-compatible endpoint per
+  # https://platform.minimax.io/docs/api-reference/text-openai-api.
+  minimax-m2.5:
+    provider: minimax
+    model: MiniMax-M2.5
+    api_key_env: MINIMAX_API_KEY
+    base_url: https://api.minimax.io/v1
+    context_window: 204800
+
+  # Qwen direct API (Alibaba Cloud DashScope). International endpoint;
+  # use https://dashscope.aliyuncs.com/compatible-mode/v1 for the China
+  # endpoint, or a regional MaaS URL if your account uses one. The
+  # model below (qwen3.5-plus) is what examples/smoke_test_qwen.py was
+  # verified against in 0.1.2; the model must be enabled in your
+  # DashScope workspace before the key can call it.
+  qwen-direct:
+    provider: qwen
+    model: qwen3.5-plus
+    api_key_env: QWEN_API_KEY
+    base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+
+  # Zhipu / Z.AI direct (GLM family). OpenAI-compatible endpoint.
+  zhipu-glm-4.7-flash:
+    provider: zhipu
+    model: glm-4.7-flash
+    api_key_env: ZHIPU_API_KEY
+    base_url: https://api.z.ai/api/paas/v4/
+    context_window: 202752
+
+  # OpenAI direct. No base_url needed; the OpenAI SDK defaults to
+  # https://api.openai.com/v1.
+  openai-gpt-4.1-nano:
+    provider: openai
+    model: gpt-4.1-nano
+    api_key_env: OPENAI_API_KEY
+
   # Route to deepseek/deepseek-chat model via OpenRouter
   openrouter-deepseek:
     provider: openrouter
     model: deepseek/deepseek-chat
     api_key_env: OPENROUTER_API_KEY
-    base_url: https://openrouter.ai/api/v1
-
-  # Route to xiaomi/mimo-v2-flash model via OpenRouter
-  openrouter-mimo-v2-flash:
-    provider: openrouter
-    model: xiaomi/mimo-v2-flash
-    api_key_env: OPENROUTER_API_KEY
-    context_window: 262144  # https://huggingface.co/XiaomiMiMo/MiMo-V2-Flash/raw/main/config.json
     base_url: https://openrouter.ai/api/v1
 
   # Route to openai/gpt-4.1-nano model via OpenRouter
@@ -42,39 +92,32 @@ endpoints:
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
 
-  # DeepSeek direct API. Cheaper than via the
-  # aggregator; requires a DeepSeek account.
-  deepseek-direct:
-    provider: deepseek
-    model: deepseek-chat
-    api_key_env: DEEPSEEK_API_KEY
-    base_url: https://api.deepseek.com
-    region: cn-hangzhou
-    cost:
-      input_per_1m: 0.28
-      output_per_1m: 1.12
-      pricing_url: https://api-docs.deepseek.com/quick_start/pricing
-      pricing_checked: 2026-05-01
+  # Route to xiaomi/mimo-v2-flash model via OpenRouter. This is the
+  # Quickstart default in the README: cheap (~$0.09/M average), already
+  # smoke-verified end-to-end in 0.1.2.
+  openrouter-mimo-v2-flash:
+    provider: openrouter
+    model: xiaomi/mimo-v2-flash
+    api_key_env: OPENROUTER_API_KEY
+    context_window: 262144  # https://huggingface.co/XiaomiMiMo/MiMo-V2-Flash/raw/main/config.json
+    base_url: https://openrouter.ai/api/v1
 
-  # Qwen direct API (Alibaba Cloud DashScope).
-  qwen-direct:
-    provider: qwen
-    model: qwen-plus
-    api_key_env: QWEN_API_KEY
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    region: cn-hangzhou
+  # Alternative: mistralai/mistral-nemo via OpenRouter. Roughly 3x cheaper
+  # than mimo-v2-flash (~$0.03/M average) but the model is older (released
+  # July 2024). Useful when cost is the dominant constraint and the
+  # workload is simple enough that a mature OSS model suffices.
+  openrouter-mistral-nemo:
+    provider: openrouter
+    model: mistralai/mistral-nemo
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
 
-  # OpenAI direct.
-  openai-gpt-4.1-nano:
-    provider: openai
-    model: gpt-4.1-nano
-    api_key_env: OPENAI_API_KEY
-
-  # Anthropic direct. Uncomment after the native AnthropicAdapter ships in a future minor release.
-  # anthropic-claude-sonnet:
-  #   provider: anthropic
-  #   model: claude-sonnet-4-5
-  #   api_key_env: ANTHROPIC_API_KEY
+  # Anthropic direct (native Messages API; requires the [anthropic] extra
+  # so `uv pip install llm-router-ledger[anthropic]` installs the SDK).
+  anthropic-claude-haiku:
+    provider: anthropic
+    model: claude-haiku-4-5
+    api_key_env: ANTHROPIC_API_KEY
 
 # Role mappings group endpoints by purpose so scripts can call
 # get_role_endpoints(project, role) instead of hard-coding names.

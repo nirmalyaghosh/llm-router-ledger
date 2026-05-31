@@ -25,6 +25,9 @@ from llm_router_ledger.exceptions import (
 from llm_router_ledger.providers._base import (
     ProviderAdapter,
 )
+from llm_router_ledger.providers.anthropic_native import (
+    AnthropicAdapter,
+)
 from llm_router_ledger.providers.openai_compat import (
     OpenAICompatAdapter,
 )
@@ -32,8 +35,16 @@ from llm_router_ledger.usage_tracker import UsageTracker
 
 
 _VERIFIED_PROVIDERS = frozenset({
+    "anthropic",
+    "azure",
+    "deepseek",
     "local-openai-compat",
+    "minimax",
+    "ollama",
+    "openai",
     "openrouter",
+    "qwen",
+    "zhipu",
 })
 
 
@@ -41,17 +52,19 @@ def _select_adapter(provider: str) -> ProviderAdapter:
     """
     Helper function used to pick the provider adapter for a given provider
     name. Raises NotImplementedError for providers whose adapter has not
-    been verified end-to-end in this release; in 0.1.0 that means
-    anything outside {local-openai-compat, openrouter}.
+    been verified end-to-end in this release (anything outside the
+    _VERIFIED_PROVIDERS set above).
     """
     if provider not in _VERIFIED_PROVIDERS:
         verified = ", ".join(sorted(_VERIFIED_PROVIDERS))
         raise NotImplementedError(
             f"The '{provider}' adapter is deferred to a later minor"
-            f" release. In 0.1.0 the verified providers are: {verified}."
+            f" release. Verified providers in this release: {verified}."
             f" Use OpenRouter as a workaround to reach most model"
             f" families."
         )
+    if provider == "anthropic":
+        return AnthropicAdapter()
     return OpenAICompatAdapter()
 
 

@@ -17,7 +17,10 @@ import json
 import os
 import uuid
 
-from datetime import datetime, timezone
+from datetime import (
+    datetime,
+    timezone,
+)
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any
