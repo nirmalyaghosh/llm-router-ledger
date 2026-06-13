@@ -37,7 +37,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "openai>=1.55.0",
+    "openai>=1.55.0,<3",
     "pydantic>=2.7",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
