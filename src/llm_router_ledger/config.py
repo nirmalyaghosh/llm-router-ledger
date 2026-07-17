@@ -134,6 +134,7 @@ class EndpointConfig(BaseModel):
     region: str | None = None
     context_window: int | None = None
     cost: CostConfig | None = None
+    extra_body: dict[str, Any] | None = None
     notes: str | None = None
 
     timeout_seconds: int = 60

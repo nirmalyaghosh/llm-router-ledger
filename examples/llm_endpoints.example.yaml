@@ -36,7 +36,7 @@ endpoints:
   # The model below (qwen2.5vl:3b) is what examples/smoke_test_ollama.py was verified against.
   # Substitute whatever you have pulled via `ollama pull <model>`.
   local-llama:
-    provider: local-openai-compat
+    provider: ollama
     model: qwen2.5vl:3b
     api_key_env: OLLAMA_API_KEY
     base_url: http://localhost:11434/v1
@@ -78,12 +78,24 @@ endpoints:
     model: gpt-4.1-nano
     api_key_env: OPENAI_API_KEY
 
-  # Route to deepseek/deepseek-chat model via OpenRouter
+  # Route to deepseek/deepseek-chat model via OpenRouter.
+  #
+  # `extra_body` is an optional vendor passthrough sent on every call to
+  # this endpoint, so model-specific knobs live in config instead of in
+  # each caller. Below it turns off reasoning tokens for a model that
+  # would otherwise emit (and bill for) them.
+  #
+  # An extra_body passed to send_message() REPLACES this value outright;
+  # the two layers are not merged, so a caller wanting both must combine
+  # them itself. `provider: anthropic` ignores extra_body entirely.
   openrouter-deepseek:
     provider: openrouter
     model: deepseek/deepseek-chat
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
+    extra_body:
+      reasoning:
+        enabled: false
 
   # Route to openai/gpt-4.1-nano model via OpenRouter
   openrouter-gpt-4.1-nano:

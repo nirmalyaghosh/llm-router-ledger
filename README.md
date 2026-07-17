@@ -55,6 +55,25 @@ text, usage, gen_id = send_message(
 - `send_message()` returns `(response_text, usage_dict, generation_id)`.
 - `UsageTracker` appends paired `llm_request` / `llm_response` events to the JSONL log, stamped with `project_id`, `run_tag`, `run_label`, and `purpose` for later grouping.
 
+## Per-endpoint request params
+
+Model-specific knobs belong in config, not in every caller. Give an endpoint an `extra_body` and it is sent on every call to that endpoint:
+
+```yaml
+endpoints:
+  openrouter-deepseek:
+    provider: openrouter
+    model: deepseek/deepseek-chat
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    extra_body:
+      reasoning:
+        enabled: false
+```
+
+- An `extra_body` passed to `send_message()` **replaces** the endpoint's value outright. The two layers are not merged, so a caller that wants both must combine them itself. This keeps an opaque vendor passthrough free of merge rules you would have to memorise.
+- **Known limitation:** `provider: anthropic` ignores `extra_body`, so the field has no effect there. Reach Claude via `provider: openrouter` if you need it.
+
 ## JSONL ledger schema
 
 - `UsageTracker` writes two events per `send_message()` call: an `llm_request` before the call, and an `llm_response` after.

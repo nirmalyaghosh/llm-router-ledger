@@ -9,6 +9,8 @@ generation_id).
 
 from __future__ import annotations
 
+import copy
+
 from typing import Any
 
 from llm_router_ledger.client_factory import (
@@ -46,6 +48,31 @@ _VERIFIED_PROVIDERS = frozenset({
     "qwen",
     "zhipu",
 })
+
+
+def _resolve_extra_body(
+    *,
+    call_value: dict[str, Any] | None,
+    endpoint_value: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """
+    Helper function used to pick the extra_body for a single call. The
+    endpoint value acts as a default: a call-level extra_body replaces it
+    outright rather than merging into it, so the effective value is
+    always exactly one layer and never a blend of the two.
+
+    The result is deep-copied because EndpointConfig is not frozen; the
+    config's own dict must never be handed to an adapter, or a mutation
+    downstream would persist onto every later call on that endpoint.
+    """
+    chosen = (
+        call_value
+        if call_value is not None
+        else endpoint_value
+    )
+    if chosen is None:
+        return None
+    return copy.deepcopy(chosen)
 
 
 def _select_adapter(provider: str) -> ProviderAdapter:
@@ -101,6 +128,12 @@ def send_message(
     OpenRouter provider routing. response_format requests structured
     output, e.g. {"type": "json_object"} for OpenAI JSON mode.
 
+    extra_body may also be set per endpoint in llm_endpoints.yaml. The
+    two layers do not merge: an extra_body passed here replaces the
+    endpoint's value outright, so a caller wanting both must combine them
+    itself. Note that the Anthropic adapter ignores extra_body entirely,
+    so the endpoint field has no effect on provider "anthropic".
+
     Raises EndpointNotFoundError if the endpoint name is missing, and
     NotImplementedError if the endpoint points at the Anthropic provider
     (the Anthropic adapter lands in a later minor release).
@@ -115,6 +148,10 @@ def send_message(
 
     ep = config.endpoints[endpoint_name]
     adapter = _select_adapter(ep.provider)
+    effective_extra_body = _resolve_extra_body(
+        call_value=extra_body,
+        endpoint_value=ep.extra_body,
+    )
     model = get_model_name(
         endpoint_name=endpoint_name,
         config=config,
@@ -144,7 +181,7 @@ def send_message(
         temperature=temperature,
         timeout_seconds=timeout_seconds,
         user_id=user_id,
-        extra_body=extra_body,
+        extra_body=effective_extra_body,
         response_format=response_format,
     )
 
