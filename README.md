@@ -71,8 +71,21 @@ endpoints:
         enabled: false
 ```
 
-- An `extra_body` passed to `send_message()` **replaces** the endpoint's value outright. The two layers are not merged, so a caller that wants both must combine them itself. This keeps an opaque vendor passthrough free of merge rules you would have to memorise.
-- **Known limitation:** `provider: anthropic` ignores `extra_body`, so the field has no effect there. Reach Claude via `provider: openrouter` if you need it.
+- An `extra_body` passed to `send_message()` replaces the endpoint's value outright. The two layers are not merged, so a caller that wants both must combine them itself. An opaque vendor passthrough carries no merge rules to memorise as a result.
+- **Known limitation:** `provider: anthropic` ignores `extra_body`, so the field has no effect there. `provider: openrouter` reaches Claude with `extra_body` intact.
+
+## Mirroring usage elsewhere
+
+`UsageTracker.subscribe()` registers a callback that receives every ledger entry, so usage can be mirrored to another store without this library depending on it:
+
+```python
+tracker.subscribe(lambda entry: my_container.upsert_item(entry))
+```
+
+- Each entry is written to the JSONL ledger before any subscriber runs.
+- A callback that raises is logged and skipped. The entry is already in the ledger, the call that produced it is unaffected, and the remaining subscribers still run.
+- Each subscriber receives its own copy of the entry.
+- Callbacks are synchronous and run on the calling thread, so a slow one delays every call. Queue the work inside the callback if the destination is remote.
 
 ## JSONL ledger schema
 

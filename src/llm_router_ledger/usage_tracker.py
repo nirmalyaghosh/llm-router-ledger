@@ -13,10 +13,12 @@ environment variables when the constructor arguments are left as None.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import uuid
 
+from collections.abc import Callable
 from datetime import (
     datetime,
     timezone,
@@ -30,6 +32,9 @@ from llm_router_ledger.exceptions import UsageTrackerError
 
 
 logger = get_logger(__name__)
+
+
+Subscriber = Callable[[dict[str, Any]], None]
 
 
 class UsageTracker:
@@ -94,6 +99,7 @@ class UsageTracker:
         self._stream: Any = None
         self._run_id: str = ""
         self._counter: int = 0
+        self._subscribers: list[Subscriber] = []
         self._open_stream()
         self.start_run()
 
@@ -128,6 +134,34 @@ class UsageTracker:
         return (
             text[: self._preview_length] + "..."
         )
+
+    def _notify(self, entry: dict[str, Any]) -> None:
+        """
+        Helper function used to hand a finished entry to every subscriber
+        after it is safely on disk. A subscriber that raises is logged and
+        skipped, never propagated: an unreachable sink or a broken
+        callback must not fail the LLM call that produced the entry, and
+        must not stop the remaining subscribers from running.
+
+        Each subscriber gets its own deep copy, so one that mutates the
+        dict cannot corrupt what the next one sees.
+        """
+        for subscriber in self._subscribers:
+            try:
+                subscriber(copy.deepcopy(entry))
+            except Exception:
+                logger.exception(
+                    "Usage subscriber %r raised on"
+                    " event %s; the entry is already"
+                    " in the ledger and the error is"
+                    " being ignored",
+                    getattr(
+                        subscriber,
+                        "__name__",
+                        subscriber,
+                    ),
+                    entry.get("event", "?"),
+                )
 
     def _open_stream(self) -> None:
         """
@@ -171,6 +205,7 @@ class UsageTracker:
         line = json.dumps(entry, default=str)
         self._stream.write(line + "\n")
         self._stream.flush()
+        self._notify(entry)
 
     def close(self) -> None:
         """
@@ -341,3 +376,22 @@ class UsageTracker:
         self._run_id = str(uuid.uuid4())[:8]
         self._counter = 0
         return self._run_id
+
+    def subscribe(self, callback: Subscriber) -> None:
+        """
+        Register a callback invoked with every entry once it has been
+        written to the JSONL ledger. Use this to mirror usage into another
+        store (a database, a queue) without the library taking on a
+        dependency on that store.
+
+        The callback receives the entry dict, the same shape as the JSONL
+        line; its return value is ignored. Callbacks run synchronously on
+        the calling thread, so a slow one delays every LLM call. Remote
+        destinations should queue the work inside the callback.
+
+        Each entry reaches the ledger before any subscriber runs, and a
+        callback that raises is logged and skipped, so a subscriber can
+        neither suppress a ledger entry nor fail the call that produced
+        it.
+        """
+        self._subscribers.append(callback)

@@ -371,3 +371,151 @@ def test_start_run_resets_counter(tmp_log_path: Path) -> None:
     tracker.close()
     assert rid_b.startswith(f"{new_run}-")
     assert rid_b.endswith("-0001")
+
+
+def test_subscribe_fan_out_preserves_registration_order(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for fan-out to multiple subscribers: with three registered, one
+    entry reaches every one of them exactly once and in the order they
+    were registered.
+    """
+    order: list[str] = []
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.subscribe(lambda entry: order.append("a"))
+    tracker.subscribe(lambda entry: order.append("b"))
+    tracker.subscribe(lambda entry: order.append("c"))
+    tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.close()
+    assert order == ["a", "b", "c"]
+
+
+def test_subscribe_notifies_on_request_and_response(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for subscriber notification across a full call: both halves of a
+    pair reach a subscriber, each carrying the same shape as the JSONL
+    line written for it.
+    """
+    seen: list[dict[str, Any]] = []
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.subscribe(seen.append)
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="r",
+        usage={
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+    )
+    tracker.close()
+    events = [entry["event"] for entry in seen]
+    assert events == ["llm_request", "llm_response"]
+    assert seen == _read_jsonl(tmp_log_path)
+
+
+def test_subscriber_error_does_not_break_ledger(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for an isolated subscriber failure: one that raises is logged
+    and skipped, so the caller sees no exception, the entry still reaches
+    the ledger, and a later subscriber still runs.
+    """
+
+    def boom(entry: dict[str, Any]) -> None:
+        raise RuntimeError("remote sink is down")
+
+    seen: list[dict[str, Any]] = []
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.subscribe(boom)
+    tracker.subscribe(seen.append)
+    tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.close()
+    assert len(_read_jsonl(tmp_log_path)) == 1
+    assert len(seen) == 1
+
+
+def test_subscriber_gets_entry_after_it_is_on_disk(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for the write-then-notify ordering: the ledger line is already
+    on disk by the time a subscriber runs, so a subscriber that reads the
+    log back sees its own entry.
+    """
+    lines_at_notify: list[int] = []
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.subscribe(
+        lambda entry: lines_at_notify.append(
+            len(_read_jsonl(tmp_log_path)),
+        ),
+    )
+    tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.close()
+    assert lines_at_notify == [1]
+
+
+def test_subscriber_mutation_does_not_affect_others(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for per-subscriber isolation: each receives its own deep copy,
+    so one that mutates or clears the entry cannot corrupt what the next
+    subscriber sees.
+    """
+
+    def vandal(entry: dict[str, Any]) -> None:
+        entry["model"] = "MUTATED"
+        entry.clear()
+
+    seen: list[dict[str, Any]] = []
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.subscribe(vandal)
+    tracker.subscribe(seen.append)
+    tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.close()
+    assert seen[0]["model"] == "m"
+
+
+def test_zero_subscribers_still_writes_ledger(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Test for the default no-subscriber path: a tracker with nothing
+    subscribed writes the ledger entry as before, so the pre-0.1.3
+    behaviour is unchanged.
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+    )
+    tracker.close()
+    assert len(_read_jsonl(tmp_log_path)) == 1
