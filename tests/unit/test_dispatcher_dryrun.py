@@ -390,8 +390,8 @@ def test_send_message_logs_provider_from_endpoint(
     ]
     providers = [e["provider"] for e in entries]
     assert providers == [
-        "local-openai-compat",
-        "local-openai-compat",
+        "ollama",
+        "ollama",
     ]
 
 

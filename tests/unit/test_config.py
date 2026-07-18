@@ -216,7 +216,7 @@ def test_load_config_returns_typed_objects(
     assert isinstance(config, LLMConfig)
     assert len(config.endpoints) == 2
     ep = config.endpoints["ollama-local"]
-    assert ep.provider == "local-openai-compat"
+    assert ep.provider == "ollama"
     assert ep.context_window == 8192
 
 

@@ -16,7 +16,7 @@ defaults:
 
 endpoints:
   ollama-local:
-    provider: local-openai-compat
+    provider: ollama
     model: llama3.1
     api_key_env: OLLAMA_API_KEY
     base_url: http://localhost:11434/v1
