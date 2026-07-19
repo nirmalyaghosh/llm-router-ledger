@@ -275,12 +275,17 @@ def load_config(path: str | Path | None = None) -> LLMConfig:
     """
     Load and validate config from YAML.
 
-    Defaults to llm_endpoints.yaml in the current working directory.
+    When path is None, falls back to the LRL_CONFIG_PATH environment
+    variable, then to llm_endpoints.yaml in the current working
+    directory. An explicit path argument always wins over the env var.
     Raises ConfigError if the file does not exist.
     """
     if path is None:
+        env_path = os.environ.get("LRL_CONFIG_PATH")
         path = (
-            Path.cwd() / "llm_endpoints.yaml"
+            Path(env_path)
+            if env_path
+            else Path.cwd() / "llm_endpoints.yaml"
         )
     path = Path(path)
     if not path.exists():

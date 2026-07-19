@@ -195,6 +195,40 @@ def test_llm_config_by_provider(sample_yaml_file: Path) -> None:
     assert eps[0].name == "openrouter-test"
 
 
+def test_load_config_explicit_path_overrides_env(
+    tmp_path: Path,
+    sample_yaml_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Test for precedence: an explicit path argument wins over
+    LRL_CONFIG_PATH, so the env var never overrides a caller that names
+    a file directly.
+    """
+    monkeypatch.setenv(
+        "LRL_CONFIG_PATH",
+        str(tmp_path / "never-read.yaml"),
+    )
+    config = load_config(sample_yaml_file)
+    assert "ollama-local" in config.endpoints
+
+
+def test_load_config_honors_lrl_config_path_env(
+    sample_yaml_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Test for LRL_CONFIG_PATH: with no path argument, load_config reads
+    the file named by the env var rather than the cwd default.
+    """
+    monkeypatch.setenv(
+        "LRL_CONFIG_PATH",
+        str(sample_yaml_file),
+    )
+    config = load_config()
+    assert "ollama-local" in config.endpoints
+
+
 def test_load_config_missing_file_raises(tmp_path: Path) -> None:
     """
     load_config raises ConfigError (not FileNotFoundError) when the path
