@@ -104,20 +104,19 @@ endpoints:
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
 
-  # Route to xiaomi/mimo-v2-flash model via OpenRouter. This is the
-  # Quickstart default in the README: cheap (~$0.09/M average), already
-  # smoke-verified end-to-end in 0.1.2.
-  openrouter-mimo-v2-flash:
+  # Route to xiaomi/mimo-v2.5 via OpenRouter. This is the Quickstart
+  # default in the README: a cheap general-purpose model, smoke-verified
+  # end-to-end.
+  openrouter-mimo-v2.5:
     provider: openrouter
-    model: xiaomi/mimo-v2-flash
+    model: xiaomi/mimo-v2.5
     api_key_env: OPENROUTER_API_KEY
-    context_window: 262144  # https://huggingface.co/XiaomiMiMo/MiMo-V2-Flash/raw/main/config.json
     base_url: https://openrouter.ai/api/v1
 
-  # Alternative: mistralai/mistral-nemo via OpenRouter. Roughly 3x cheaper
-  # than mimo-v2-flash (~$0.03/M average) but the model is older (released
-  # July 2024). Useful when cost is the dominant constraint and the
-  # workload is simple enough that a mature OSS model suffices.
+  # Alternative: mistralai/mistral-nemo via OpenRouter. An older (released
+  # July 2024) but mature and inexpensive OSS model. Useful when cost is
+  # the dominant constraint and the workload is simple enough that a
+  # mature OSS model suffices.
   openrouter-mistral-nemo:
     provider: openrouter
     model: mistralai/mistral-nemo

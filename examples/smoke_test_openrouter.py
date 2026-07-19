@@ -8,8 +8,8 @@ to the JSONL ledger for each call.
 Prerequisites:
 - OPENROUTER_API_KEY set in .env or shell environment.
 - llm_endpoints.yaml in the working directory with an endpoint
-  matching --endpoint (default endpoint openrouter-mimo-v2-flash
-  in examples/llm_endpoints.example.yaml uses xiaomi/mimo-v2-flash;
+  matching --endpoint (default endpoint openrouter-mimo-v2.5
+  in examples/llm_endpoints.example.yaml uses xiaomi/mimo-v2.5;
   override with --endpoint to use a different OpenRouter model).
 
 Run from the project root:
@@ -54,10 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--endpoint",
-        default="openrouter-mimo-v2-flash",
+        default="openrouter-mimo-v2.5",
         help=(
             "Endpoint name from llm_endpoints.yaml "
-            "(default: openrouter-mimo-v2-flash)."
+            "(default: openrouter-mimo-v2.5)."
         ),
     )
     args = parser.parse_args(argv)

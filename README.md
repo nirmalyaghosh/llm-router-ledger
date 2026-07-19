@@ -34,7 +34,7 @@ tracker = UsageTracker(
     project_id="my-blog",
 )
 text, usage, gen_id = send_message(
-    endpoint_name="openrouter-mimo-v2-flash",
+    endpoint_name="openrouter-mimo-v2.5",
     system="You are concise.",
     user="Explain prompt caching in two sentences.",
     tracker=tracker,
@@ -107,7 +107,7 @@ Exactly one of the two fields is populated per `llm_response` event; queries tha
 llm-router-ledger list                          # show configured endpoints
 llm-router-ledger validate llm_endpoints.yaml   # validate the YAML
 llm-router-ledger stale --days 30               # endpoints with stale pricing
-llm-router-ledger chat --endpoint openrouter-mimo-v2-flash --system "You are concise." --user "Hello." --log-path logs/usage.jsonl --project-id my-project
+llm-router-ledger chat --endpoint openrouter-mimo-v2.5 --system "You are concise." --user "Hello." --log-path logs/usage.jsonl --project-id my-project
 ```
 
 ## Env vars
