@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-router-ledger"
-version = "0.1.2"
+version = "0.1.3"
 description = "Route LLM calls through one send_message() across OpenAI-compatible providers and Anthropic's native Messages API; keep a JSONL ledger of every request and response for offline cost reconciliation."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -63,6 +63,19 @@ llm-router-ledger = "llm_router_ledger.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llm_router_ledger"]
+
+# Allowlist, not a denylist: anything not named here stays out of the
+# sdist, so a new working file cannot leak by default.
+[tool.hatch.build.targets.sdist]
+include = [
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/README.md",
+    "/examples",
+    "/pyproject.toml",
+    "/src",
+    "/tests",
+]
 
 [tool.ruff]
 line-length = 79
