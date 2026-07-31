@@ -68,6 +68,43 @@ def test_cost_estimate_cache_hit_uses_cached_rate() -> None:
     assert actual == pytest.approx(0.0021)
 
 
+def test_embedding_dimensions_loads_and_defaults_to_none(
+    tmp_path: Path,
+) -> None:
+    """
+    embedding_dimensions is read from YAML when present and stays None
+    otherwise, so chat endpoints written before the field existed keep
+    loading unchanged.
+    """
+    yaml_text = (
+        "endpoints:\n"
+        "  embed-endpoint:\n"
+        "    provider: openrouter\n"
+        "    model: baai/bge-m3\n"
+        "    api_key_env: OPENROUTER_API_KEY\n"
+        "    embedding_dimensions: 1024\n"
+        "  chat-endpoint:\n"
+        "    provider: openrouter\n"
+        "    model: xiaomi/mimo-v2.5\n"
+        "    api_key_env: OPENROUTER_API_KEY\n"
+    )
+    path = tmp_path / "llm_endpoints.yaml"
+    path.write_text(yaml_text, encoding="utf-8")
+    config = load_config(path)
+    assert (
+        config.endpoints[
+            "embed-endpoint"
+        ].embedding_dimensions
+        == 1024
+    )
+    assert (
+        config.endpoints[
+            "chat-endpoint"
+        ].embedding_dimensions
+        is None
+    )
+
+
 def test_endpoint_api_key_available_false_without_env(
     monkeypatch: pytest.MonkeyPatch,
     sample_yaml_file: Path,

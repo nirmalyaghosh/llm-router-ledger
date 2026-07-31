@@ -97,6 +97,60 @@ endpoints:
       reasoning:
         enabled: false
 
+  # Embedding endpoints via OpenRouter, called with create_embeddings()
+  # rather than send_message(). Three of the nine verified models are
+  # shown; the README lists the full set with dimensions and prices.
+  #
+  # output_per_1m is 0.00 throughout: embedding endpoints bill input
+  # only and return no completion tokens.
+  #
+  # embedding_dimensions is the width of the returned vectors, so a
+  # vector column or collection can be sized without first making a
+  # call. It is not OpenAI's `dimensions` request parameter and does not
+  # truncate anything; create_embeddings raises ProviderError if the
+  # provider returns a different width.
+  openrouter-embed-bge-m3:
+    provider: openrouter
+    model: baai/bge-m3
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 8194
+    embedding_dimensions: 1024
+    cost:
+      input_per_1m: 0.01
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/baai/bge-m3
+      pricing_checked: "2026-07-29"
+    notes: Multilingual.
+
+  # Free tier, so useful for trying create_embeddings() at no cost.
+  openrouter-embed-nemotron-3-1b-free:
+    provider: openrouter
+    model: nvidia/nemotron-3-embed-1b:free
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 32768
+    embedding_dimensions: 2048
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/nvidia/nemotron-3-embed-1b:free
+      pricing_checked: "2026-07-29"
+      pricing_notes: "Free tier. Rate limits apply."
+
+  openrouter-embed-text-embedding-3-small:
+    provider: openrouter
+    model: openai/text-embedding-3-small
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 8192
+    embedding_dimensions: 1536
+    cost:
+      input_per_1m: 0.02
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/openai/text-embedding-3-small
+      pricing_checked: "2026-07-29"
+
   # Route to openai/gpt-4.1-nano model via OpenRouter
   openrouter-gpt-4.1-nano:
     provider: openrouter

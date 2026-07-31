@@ -124,6 +124,15 @@ class DefaultsConfig(BaseModel):
 class EndpointConfig(BaseModel):
     """
     Single LLM endpoint definition.
+
+    embedding_dimensions is the width of the vectors an embedding
+    endpoint returns. It is declarative metadata, never sent on the
+    wire, so consumers can size a vector column or collection without
+    first making a call; it is not OpenAI's `dimensions` request
+    parameter and setting it does not truncate anything. When set,
+    create_embeddings raises ProviderError if the provider returns a
+    different width, which catches an upstream re-route before malformed
+    vectors reach an index. Leave unset on chat endpoints.
     """
 
     name: str = ""
@@ -133,6 +142,7 @@ class EndpointConfig(BaseModel):
     base_url: str | None = None
     region: str | None = None
     context_window: int | None = None
+    embedding_dimensions: int | None = None
     cost: CostConfig | None = None
     extra_body: dict[str, Any] | None = None
     notes: str | None = None
