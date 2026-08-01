@@ -1,12 +1,14 @@
 """
-OpenAI-compatible provider adapter.
+OpenAI-compatible provider adapters.
 
-Wraps client.chat.completions.create(...) for every OpenAI-compatible
-endpoint: OpenAI, Azure (via AzureOpenAI client), OpenRouter, DeepSeek,
-MiniMax, Qwen, Zhipu, Xiaomi, ByteDance, Gemini's compatibility endpoint,
-and local servers (Ollama, LM Studio, vLLM).
+OpenAICompatAdapter wraps client.chat.completions.create(...) and
+OpenAICompatEmbeddingAdapter wraps client.embeddings.create(...) for
+every OpenAI-compatible endpoint: OpenAI, Azure (via AzureOpenAI
+client), OpenRouter, DeepSeek, MiniMax, Qwen, Zhipu, Xiaomi, ByteDance,
+Gemini's compatibility endpoint, and local servers (Ollama, LM Studio,
+vLLM).
 
-The adapter does not catch SDK exceptions; openai.APIError and friends
+Neither adapter catches SDK exceptions; openai.APIError and friends
 propagate so the caller can distinguish rate limits, timeouts, and auth
 failures by subtype.
 """
@@ -15,7 +17,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from llm_router_ledger.providers._base import ProviderAdapter
+from llm_router_ledger.exceptions import ProviderError
+from llm_router_ledger.providers._base import (
+    EmbeddingAdapter,
+    ProviderAdapter,
+)
+
+
+ENCODING_FORMAT = "float"
 
 
 class OpenAICompatAdapter(ProviderAdapter):
@@ -95,3 +104,137 @@ class OpenAICompatAdapter(ProviderAdapter):
             )
         }
         return text, usage, response.id or ""
+
+
+class OpenAICompatEmbeddingAdapter(EmbeddingAdapter):
+    """
+    Single embedding adapter for every OpenAI-compatible endpoint.
+    """
+
+    def embed(
+        self,
+        *,
+        client: Any,
+        model: str,
+        texts: list[str],
+        expected_dimensions: int | None = None,
+        timeout_seconds: float | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[list[list[float]], dict[str, Any], str]:
+        """
+        Embed texts against an OpenAI-compat endpoint and return
+        (vectors, usage_dict, generation_id).
+
+        encoding_format is always sent as "float" rather than left to the
+        SDK. The SDK otherwise defaults to base64 and decodes client
+        side, which some upstreams reject outright (OpenRouter's
+        nvidia/nemotron-3-embed-1b returns a 400 naming base64). Pinning
+        it keeps one wire format across every provider.
+
+        usage_dict always carries prompt_tokens, completion_tokens, and
+        total_tokens, with completion_tokens fixed at 0 because embedding
+        endpoints bill input only. dimensions and embedding_count are
+        always present; cost, is_byok, and upstream_provider are included
+        only when the provider reports them. OpenRouter returns cost as
+        the actual USD charge for the call, and upstream_provider names
+        the service that served it (routing can move between calls and
+        change what a given endpoint costs).
+
+        Raises ProviderError when expected_dimensions is set and the
+        provider returns vectors of a different width.
+        """
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "input": texts,
+            "encoding_format": ENCODING_FORMAT,
+        }
+        if timeout_seconds is not None:
+            kwargs["timeout"] = timeout_seconds
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
+
+        response = client.embeddings.create(
+            **kwargs,
+        )
+
+        # Ordered by index rather than trusting arrival order: the index
+        # field exists precisely because the API does not promise one.
+        items = sorted(
+            response.data,
+            key=lambda item: getattr(
+                item,
+                "index",
+                0,
+            ),
+        )
+        vectors = [
+            list(item.embedding) for item in items
+        ]
+
+        # Guard the declared width. OpenRouter routes across upstreams
+        # and the one serving a given endpoint can change between
+        # calls; a width change would otherwise be written into a
+        # fixed-width index and only surface as degraded retrieval.
+        if expected_dimensions is not None and vectors:
+            actual = len(vectors[0])
+            if actual != expected_dimensions:
+                raise ProviderError(
+                    f"Endpoint declares"
+                    f" embedding_dimensions"
+                    f" {expected_dimensions} but model"
+                    f" '{model}' returned {actual}."
+                    f" Refusing to return vectors of an"
+                    f" unexpected width; correct the"
+                    f" config or pin the upstream"
+                    f" provider."
+                )
+
+        raw = response.usage
+        prompt_tokens = (
+            getattr(raw, "prompt_tokens", 0)
+            if raw is not None
+            else 0
+        )
+        total_tokens = (
+            getattr(raw, "total_tokens", 0)
+            if raw is not None
+            else 0
+        )
+        usage: dict[str, Any] = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": 0,
+            "total_tokens": (
+                total_tokens or prompt_tokens
+            ),
+            "embedding_count": len(vectors),
+            "dimensions": (
+                len(vectors[0]) if vectors else 0
+            ),
+        }
+        cost = (
+            getattr(raw, "cost", None)
+            if raw is not None
+            else None
+        )
+        if cost is not None:
+            usage["cost"] = cost
+        is_byok = (
+            getattr(raw, "is_byok", None)
+            if raw is not None
+            else None
+        )
+        if is_byok is not None:
+            usage["is_byok"] = is_byok
+        upstream = getattr(
+            response,
+            "provider",
+            None,
+        )
+        if upstream:
+            usage["upstream_provider"] = upstream
+
+        return (
+            vectors,
+            usage,
+            getattr(response, "id", "") or "",
+        )

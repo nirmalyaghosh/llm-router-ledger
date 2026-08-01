@@ -234,6 +234,7 @@ class UsageTracker:
         user_prompt: str,
         purpose: str | None = None,
         provider: str = "",
+        modality: str = "text",
         metadata: dict[str, Any] | None = None,
     ) -> str:
         """
@@ -244,6 +245,11 @@ class UsageTracker:
         provider is the EndpointConfig.provider value (e.g. "ollama",
         "openrouter", "azure"). Recorded verbatim so consumers can group
         ledger entries by which server produced the tokens.
+
+        modality names the capability the call used, e.g. "embedding".
+        The key is written only when it is not "text", so text entries
+        keep the exact shape they had before the field existed and a
+        reader may treat an absent modality as text.
         """
         self._counter += 1
         width = self._counter_width
@@ -279,6 +285,8 @@ class UsageTracker:
         }
         if provider:
             entry["provider"] = provider
+        if modality != "text":
+            entry["modality"] = modality
         if metadata:
             entry["metadata"] = metadata
         self._write_entry(entry)
@@ -294,6 +302,7 @@ class UsageTracker:
         generation_id: str = "",
         purpose: str | None = None,
         provider: str = "",
+        modality: str = "text",
         usage_details: (
             dict[str, Any] | None
         ) = None,
@@ -306,6 +315,9 @@ class UsageTracker:
 
         provider mirrors the value passed to the paired log_request call
         and identifies the server that produced the tokens.
+
+        modality mirrors the paired log_request call and is written only
+        when it is not "text", leaving existing text entries unchanged.
         """
         id_key = (
             "generation_id"
@@ -360,6 +372,8 @@ class UsageTracker:
         }
         if provider:
             entry["provider"] = provider
+        if modality != "text":
+            entry["modality"] = modality
         if usage_details:
             entry["usage_details"] = (
                 usage_details
