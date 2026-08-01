@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "llm-router-ledger"
 version = "0.1.4"
-description = "Route LLM calls through one send_message() across OpenAI-compatible providers and Anthropic's native Messages API; keep a JSONL ledger of every request and response for offline cost reconciliation."
+description = "Route text and embedding calls across LLM providers, keeping a JSONL ledger of every request and response for offline cost reconciliation."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
@@ -16,12 +16,14 @@ keywords = [
     "anthropic",
     "azure",
     "deepseek",
+    "embeddings",
     "ledger",
     "llm",
     "minimax",
     "ollama",
     "openai",
     "openrouter",
+    "qwen",
     "router",
     "tracking",
     "usage",
