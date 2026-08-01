@@ -19,7 +19,13 @@ from llm_router_ledger import (
     load_config,
 )
 from llm_router_ledger.config import LLMConfig
+from llm_router_ledger.dispatcher import (
+    _select_embedding_adapter,
+)
 from llm_router_ledger.exceptions import EndpointNotFoundError
+from llm_router_ledger.providers.openai_compat import (
+    OpenAICompatEmbeddingAdapter,
+)
 
 
 EMBEDDING_YAML = """\
@@ -43,9 +49,15 @@ endpoints:
 
   ollama-local:
     provider: ollama
-    model: llama3.1
+    model: qwen3-embedding:0.6b
     api_key_env: OLLAMA_API_KEY
     base_url: http://localhost:11434/v1
+    embedding_dimensions: 1024
+
+  openai-direct:
+    provider: openai
+    model: text-embedding-3-small
+    api_key_env: OPENAI_API_KEY
 """
 
 
@@ -92,10 +104,15 @@ def embedding_config(
 ) -> LLMConfig:
     """
     Return a config with an embedding endpoint that declares
-    embedding_dimensions, one that does not, and a chat endpoint on a
-    provider with no verified embedding adapter.
+    embedding_dimensions, one that does not, one on Ollama, and one on
+    a provider with no verified embedding adapter.
+
+    The last is OpenAI, chosen because it genuinely serves embeddings
+    and its chat adapter is verified. It is refused anyway, which is
+    the whole point of the separate gate.
     """
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    monkeypatch.setenv("OPENAI_API_KEY", "x")
     monkeypatch.setenv("OPENROUTER_API_KEY", "x")
     path = tmp_path / "llm_endpoints.yaml"
     path.write_text(EMBEDDING_YAML, encoding="utf-8")
@@ -318,6 +335,11 @@ def test_create_embeddings_unverified_provider_raises(
     A provider whose chat adapter is verified is still refused for
     embeddings until its embeddings endpoint has been exercised
     end-to-end. The two capabilities are gated independently.
+
+    openai-direct makes the point precisely: OpenAI does serve
+    embeddings, and this library's OpenAI chat adapter is verified.
+    Neither fact says anything about calling OpenAI's embeddings
+    endpoint directly, which was never exercised here.
     """
     monkeypatch.setattr(
         "llm_router_ledger.dispatcher.get_client",
@@ -325,8 +347,26 @@ def test_create_embeddings_unverified_provider_raises(
     )
     with pytest.raises(NotImplementedError) as excinfo:
         create_embeddings(
-            endpoint_name="ollama-local",
+            endpoint_name="openai-direct",
             texts=["a"],
             config=embedding_config,
         )
-    assert "ollama" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "openai" in message
+    # The message must name what IS available, or the caller has no
+    # way to know Ollama would have worked.
+    assert "ollama" in message
+
+
+def test_select_embedding_adapter_accepts_ollama() -> None:
+    """
+    Ollama resolves to the shared OpenAI-compatible embedding adapter
+    rather than needing one of its own. Its /v1/embeddings response
+    parses on the same code path, just without the cost, is_byok and
+    provider fields OpenRouter adds.
+    """
+    adapter = _select_embedding_adapter("ollama")
+    assert isinstance(
+        adapter,
+        OpenAICompatEmbeddingAdapter,
+    )

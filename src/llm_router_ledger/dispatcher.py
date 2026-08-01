@@ -47,6 +47,7 @@ _TOKEN_USAGE_KEYS = frozenset({
 })
 
 _VERIFIED_EMBEDDING_PROVIDERS = frozenset({
+    "ollama",
     "openrouter",
 })
 
@@ -142,8 +143,13 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     Embedding verification is tracked separately from text, in
     _VERIFIED_EMBEDDING_PROVIDERS, because a working chat adapter says
     nothing about embeddings: most providers in _VERIFIED_PROVIDERS
-    serve no embedding models at all, and those that do were not
-    exercised end-to-end in this release.
+    serve no embedding models at all, and the rest were not exercised
+    end-to-end in this release.
+
+    Note that "local-openai-compat" is deliberately absent even though
+    "ollama" is present. Ollama's embeddings endpoint was verified
+    directly; LM Studio, llama.cpp and vLLM share that provider name
+    and were not.
     """
     if provider not in _VERIFIED_EMBEDDING_PROVIDERS:
         verified = ", ".join(
@@ -153,7 +159,8 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
             f"Embeddings are not available for the '{provider}'"
             f" provider. Verified embedding providers in this"
             f" release: {verified}. Point the endpoint at OpenRouter"
-            f" to reach the hosted embedding models."
+            f" for hosted embedding models, or at Ollama to run one"
+            f" locally."
         )
     return OpenAICompatEmbeddingAdapter()
 

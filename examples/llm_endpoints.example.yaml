@@ -51,6 +51,35 @@ endpoints:
     base_url: https://api.minimax.io/v1
     context_window: 204800
 
+  # Local Ollama embeddings, called with create_embeddings() rather
+  # than send_message(). Pull the model first:
+  #   ollama pull qwen3-embedding:0.6b
+  #
+  # Nothing is billed, but cost is still declared at 0.00 so the
+  # endpoint has the same shape as a hosted one and the ledger records
+  # tokens either way, keeping local and hosted runs comparable.
+  #
+  # Ollama returns no response id, so ledger rows for this endpoint
+  # carry an empty provider_response_id. There is no invoice to
+  # reconcile against, so nothing is lost.
+  ollama-embed-qwen3-0.6b:
+    provider: ollama
+    model: qwen3-embedding:0.6b
+    api_key_env: OLLAMA_API_KEY
+    base_url: http://localhost:11434/v1
+    context_window: 32768
+    embedding_dimensions: 1024
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
+      pricing_url: https://ollama.com/library/qwen3-embedding
+      pricing_checked: "2026-08-01"
+      pricing_notes: "Runs locally. No API cost."
+    notes: >
+      Native width is 1024. The model page advertises up to 4096, but
+      that is the Matryoshka range the weights support, not what
+      Ollama returns.
+
   # Qwen direct API (Alibaba Cloud DashScope). International endpoint;
   # use https://dashscope.aliyuncs.com/compatible-mode/v1 for the China
   # endpoint, or a regional MaaS URL if your account uses one. The
