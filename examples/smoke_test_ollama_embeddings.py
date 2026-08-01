@@ -2,10 +2,10 @@
 End-to-end smoke test of create_embeddings() against local Ollama.
 
 Embeds a small corpus through create_embeddings() and appends paired
-llm_request / llm_response events to the shared Ollama ledger,
-logs/ollama_smoke_test_token_usage.jsonl, both stamped modality
-"embedding" so they are distinguishable from the send_message()
-entries smoke_test_ollama.py writes to the same file.
+llm_request / llm_response events to the shared ledger at
+_smoke_test_common.LEDGER_PATH, both stamped modality "embedding" so
+they are distinguishable from the send_message() entries every other
+smoke test writes to the same file.
 
 Nothing is billed, so unlike the OpenRouter counterpart the ledger
 rows carry no cost: Ollama reports no cost field, and the endpoint's
@@ -96,9 +96,6 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_embedding_smoke_test(
         endpoint_name=args.endpoint,
-        log_path=Path(
-            "logs/ollama_smoke_test_token_usage.jsonl",
-        ),
         project_id="ollama-smoke-test",
         texts=texts,
     )

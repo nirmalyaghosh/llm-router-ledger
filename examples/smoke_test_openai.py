@@ -23,7 +23,6 @@ from importlib.metadata import (
     PackageNotFoundError,
     version,
 )
-from pathlib import Path
 
 try:
     _LIBRARY_VERSION = version("llm-router-ledger")
@@ -63,7 +62,6 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_smoke_test(
         endpoint_name=args.endpoint,
-        log_path=Path("logs/openai_smoke_test_token_usage.jsonl"),
         project_id="openai-smoke-test",
     )
 

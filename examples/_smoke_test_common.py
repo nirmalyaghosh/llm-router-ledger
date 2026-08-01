@@ -61,6 +61,19 @@ EMBEDDING_TEXTS: list[str] = [
 ]
 
 
+# One ledger for every smoke test, across all providers and both
+# modalities. The per-provider files this replaces implied that the
+# filename identified the provider, which stopped being true once a
+# single provider served several models and once one provider served
+# both text and embeddings. Every row already carries provider, model,
+# modality and project_id, so a per-provider view is a filter rather
+# than a file.
+
+LEDGER_PATH = Path(
+    "logs/llm_router_ledger_smoke_tests_token_usage.jsonl",
+)
+
+
 @dataclass(frozen=True)
 class Workload:
     """
@@ -154,14 +167,14 @@ def load_embedding_texts(path: Path) -> list[str]:
 def run_embedding_smoke_test(
     *,
     endpoint_name: str,
-    log_path: Path,
     project_id: str,
+    log_path: Path | None = None,
     texts: list[str] | None = None,
 ) -> int:
     """
     Embed texts (default EMBEDDING_TEXTS) against endpoint_name,
-    writing paired llm_request and llm_response events to log_path.
-    Returns 0 on success.
+    appending paired llm_request and llm_response events to log_path,
+    which defaults to the shared LEDGER_PATH. Returns 0 on success.
 
     Reports two costs per call. reported is the provider's own charge
     for the call, taken from the response and written to the ledger's
@@ -175,6 +188,8 @@ def run_embedding_smoke_test(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if log_path is None:
+        log_path = LEDGER_PATH
     if texts is None:
         texts = EMBEDDING_TEXTS
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,18 +241,20 @@ def run_embedding_smoke_test(
 def run_smoke_test(
     *,
     endpoint_name: str,
-    log_path: Path,
     project_id: str,
+    log_path: Path | None = None,
 ) -> int:
     """
-    Run every Workload in WORKLOADS against endpoint_name, writing
-    paired llm_request and llm_response events to log_path. Returns
-    0 on success.
+    Run every Workload in WORKLOADS against endpoint_name, appending
+    paired llm_request and llm_response events to log_path, which
+    defaults to the shared LEDGER_PATH. Returns 0 on success.
     """
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    if log_path is None:
+        log_path = LEDGER_PATH
     log_path.parent.mkdir(parents=True, exist_ok=True)
     tracker = UsageTracker(
         log_path=log_path,

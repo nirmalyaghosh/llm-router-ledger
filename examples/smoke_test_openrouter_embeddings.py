@@ -2,13 +2,13 @@
 End-to-end smoke test of create_embeddings() against OpenRouter.
 
 Embeds a small corpus through create_embeddings() and appends paired
-llm_request / llm_response events to the shared OpenRouter ledger,
-logs/openrouter_smoke_test_token_usage.jsonl, both stamped modality
-"embedding" so they are distinguishable from the send_message()
-entries smoke_test_openrouter.py writes to the same file. The
-response event carries the provider's own reported cost under
-usage_details, alongside the vector count and width, so a run leaves
-a durable record of what the call cost.
+llm_request / llm_response events to the shared ledger at
+_smoke_test_common.LEDGER_PATH, both stamped modality "embedding" so
+they are distinguishable from the send_message() entries every other
+smoke test writes to the same file. The response event carries the
+provider's own reported cost under usage_details, alongside the
+vector count and width, so a run leaves a durable record of what the
+call cost.
 
 Prerequisites:
 - OPENROUTER_API_KEY set in .env or shell environment.
@@ -94,13 +94,9 @@ def main(argv: list[str] | None = None) -> int:
 
     return run_embedding_smoke_test(
         endpoint_name=args.endpoint,
-        # Same ledger and project_id as smoke_test_openrouter.py: one
-        # file per provider, not per capability. The tracker opens in
-        # append mode, so text and embedding runs interleave safely and
-        # a reader separates them on the modality field.
-        log_path=Path(
-            "logs/openrouter_smoke_test_token_usage.jsonl",
-        ),
+        # Same project_id as smoke_test_openrouter.py. Every smoke test
+        # now appends to the one ledger at LEDGER_PATH, so project_id
+        # and provider are what separate the runs, not the filename.
         project_id="openrouter-smoke-test",
         texts=texts,
     )
