@@ -247,6 +247,65 @@ def test_log_response_token_normalisation_input_output(
     assert u["total_tokens"] == 30
 
 
+def test_modality_omitted_on_the_text_path(tmp_log_path: Path) -> None:
+    """
+    A call left on the default modality writes no "modality" key at all,
+    so text entries keep byte-for-byte the shape they had before the
+    field existed and an existing reconciler reads them unchanged. An
+    absent modality means text.
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="s",
+        user_prompt="u",
+        provider="ollama",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="hi",
+        usage={
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+        provider="ollama",
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert len(entries) == 2
+    assert "modality" not in entries[0]
+    assert "modality" not in entries[1]
+
+
+def test_modality_round_trips_when_not_text(tmp_log_path: Path) -> None:
+    """
+    A non-default modality is written to both paired entries, so spend
+    on a second capability can be separated from text spend when the
+    ledger is reconciled against the provider's export.
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="",
+        user_prompt="u",
+        modality="embedding",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="",
+        usage={"prompt_tokens": 9, "total_tokens": 9},
+        modality="embedding",
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert len(entries) == 2
+    assert entries[0]["modality"] == "embedding"
+    assert entries[1]["modality"] == "embedding"
+
+
 def test_provider_field_omitted_when_empty(tmp_log_path: Path) -> None:
     """
     When provider is left as the default empty string, neither

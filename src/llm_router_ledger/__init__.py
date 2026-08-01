@@ -4,6 +4,7 @@ request and response for offline cost reconciliation.
 
 Public surface:
 - send_message: primary entry point.
+- create_embeddings: vector embeddings entry point.
 - UsageTracker: append-only JSONL logger.
 - load_config, LLMConfig: YAML config + types.
 - Exceptions rooted at LLMCallError.
@@ -28,6 +29,7 @@ from llm_router_ledger.config import (
     load_config,
 )
 from llm_router_ledger.dispatcher import (
+    create_embeddings,
     send_message,
 )
 from llm_router_ledger.exceptions import (
@@ -63,6 +65,7 @@ __all__ = [
     "UsageTracker",
     "UsageTrackerError",
     "__version__",
+    "create_embeddings",
     "get_client",
     "get_context_window",
     "get_model_name",
