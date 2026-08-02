@@ -35,7 +35,7 @@ tracker = UsageTracker(
     log_path="logs/usage.jsonl",
     project_id="my-blog",
 )
-text, usage, gen_id = send_message(
+result = send_message(
     endpoint_name="openrouter-mimo-v2.5",
     system="You are concise.",
     user="Explain prompt caching in two sentences.",
@@ -46,7 +46,7 @@ text, usage, gen_id = send_message(
 Or against a local Ollama server, with no API costs:
 
 ```python
-text, usage, gen_id = send_message(
+result = send_message(
     endpoint_name="local-llama",
     system="You are concise.",
     user="Explain prompt caching in two sentences.",
@@ -54,7 +54,7 @@ text, usage, gen_id = send_message(
 )
 ```
 
-- `send_message()` returns `(response_text, usage_dict, generation_id)`.
+- `send_message()` returns a `ChatResult` with `.text`, `.usage`, and `.generation_id`.
 - `UsageTracker` appends paired `llm_request` / `llm_response` events to the JSONL log, stamped with `project_id`, `run_tag`, `run_label`, and `purpose` for later grouping.
 
 ## Embeddings
@@ -68,15 +68,15 @@ tracker = UsageTracker(
     log_path="logs/usage.jsonl",
     project_id="my-blog",
 )
-vectors, usage, gen_id = create_embeddings(
+result = create_embeddings(
     endpoint_name="openrouter-embed-bge-m3",
     texts=["first passage", "second passage"],
     tracker=tracker,
 )
 ```
 
-- `create_embeddings()` returns `(vectors, usage_dict, generation_id)`, one vector per input, in input order.
-- `usage_dict` adds `dimensions` and `embedding_count` to the token keys, plus `cost`, `is_byok`, and `upstream_provider` when the provider reports them.
+- `create_embeddings()` returns an `EmbeddingResult` with `.vectors` (one per input, in input order), `.usage`, and `.generation_id`.
+- `.usage` adds `dimensions` and `embedding_count` to the token keys, plus `cost`, `is_byok`, and `upstream_provider` when the provider reports them.
 - `completion_tokens` is always 0. Embeddings bill input only.
 
 ### Verified models

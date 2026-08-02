@@ -61,7 +61,7 @@ def test_openrouter_send_message_roundtrip(
         log_path=tmp_path / "usage.jsonl",
         project_id="integration-test",
     )
-    text, usage, gen_id = send_message(
+    result = send_message(
         endpoint_name="openrouter-test",
         system="You are concise.",
         user="Reply with exactly: hello.",
@@ -70,8 +70,8 @@ def test_openrouter_send_message_roundtrip(
         max_tokens=32,
     )
     tracker.close()
-    assert text.strip()
-    assert usage["prompt_tokens"] > 0
-    assert usage["completion_tokens"] > 0
-    assert usage["total_tokens"] > 0
-    assert gen_id.startswith("gen-")
+    assert result.text.strip()
+    assert result.usage["prompt_tokens"] > 0
+    assert result.usage["completion_tokens"] > 0
+    assert result.usage["total_tokens"] > 0
+    assert result.generation_id.startswith("gen-")

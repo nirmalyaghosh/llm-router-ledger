@@ -179,14 +179,14 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
         ),
     )
     config = load_config(p)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name="anthropic-test",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "ok"
-    assert gen == "msg_test"
+    assert result.text == "ok"
+    assert result.generation_id == "msg_test"
 
 
 @pytest.mark.parametrize(
@@ -302,14 +302,14 @@ def test_send_message_dispatches_to_openai_compat(
         ),
     )
     config = load_config(p)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name=f"{provider}-test",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "ok"
-    assert gen == mock_gen_id
+    assert result.text == "ok"
+    assert result.generation_id == mock_gen_id
 
 
 def test_send_message_omits_user_id_and_extra_body_by_default(
@@ -406,35 +406,35 @@ def test_send_message_no_tracker_writes_nothing(
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
-    text, _, _ = send_message(
+    result = send_message(
         endpoint_name="ollama-local",
         system="sys",
         user="usr",
         config=config,
     )
-    assert text == "hello world"
+    assert result.text == "hello world"
     assert not tmp_log_path.exists()
 
 
-def test_send_message_returns_adapter_tuple(
+def test_send_message_returns_adapter_result(
     monkeypatch: pytest.MonkeyPatch,
     sample_yaml_file: Path,
 ) -> None:
     """
-    Return value is the adapter's tuple unchanged.
+    Return value carries the adapter's tuple unchanged as a ChatResult.
     """
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name="ollama-local",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "hello world"
-    assert usage["total_tokens"] == 12
-    assert gen == "gen-abc123"
+    assert result.text == "hello world"
+    assert result.usage["total_tokens"] == 12
+    assert result.generation_id == "gen-abc123"
 
 
 def test_send_message_unknown_endpoint_raises(

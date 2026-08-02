@@ -3,9 +3,8 @@ Public send_message and create_embeddings entry points.
 
 Each resolves an endpoint, gets the SDK client, picks the adapter for
 that capability, calls it, optionally appends paired llm_request and
-llm_response events via a UsageTracker, and returns the standard tuple
-(payload, usage_dict, generation_id). The payload is the response text
-for send_message and the list of vectors for create_embeddings.
+llm_response events via a UsageTracker, and returns a result object:
+ChatResult for send_message, EmbeddingResult for create_embeddings.
 """
 
 from __future__ import annotations
@@ -36,6 +35,10 @@ from llm_router_ledger.providers.anthropic_native import (
 from llm_router_ledger.providers.openai_compat import (
     OpenAICompatAdapter,
     OpenAICompatEmbeddingAdapter,
+)
+from llm_router_ledger.results import (
+    ChatResult,
+    EmbeddingResult,
 )
 from llm_router_ledger.usage_tracker import UsageTracker
 
@@ -201,14 +204,13 @@ def create_embeddings(
     metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
     extra_body: dict[str, Any] | None = None,
-) -> tuple[list[list[float]], dict[str, Any], str]:
+) -> EmbeddingResult:
     """
-    Embed texts on the named endpoint and return (vectors, usage_dict,
-    generation_id).
+    Embed texts on the named endpoint and return an EmbeddingResult.
 
-    vectors is ordered to match texts, one vector per input.
+    result.vectors is ordered to match texts, one vector per input.
 
-    usage_dict carries the normalised prompt_tokens, completion_tokens,
+    result.usage carries the normalised prompt_tokens, completion_tokens,
     and total_tokens keys plus whatever the provider reported about the
     call: dimensions and embedding_count always, and cost, is_byok, and
     upstream_provider when available. The caller gets all of it; the
@@ -292,7 +294,11 @@ def create_embeddings(
             metadata=metadata,
         )
 
-    return vectors, usage, generation_id
+    return EmbeddingResult(
+        vectors=vectors,
+        usage=usage,
+        generation_id=generation_id,
+    )
 
 
 def send_message(
@@ -310,10 +316,10 @@ def send_message(
     user_id: str | None = None,
     extra_body: dict[str, Any] | None = None,
     response_format: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, int], str]:
+) -> ChatResult:
     """
-    Send a system + user message to the named endpoint and return
-    (response_text, usage_dict, generation_id).
+    Send a system + user message to the named endpoint and return a
+    ChatResult.
 
     When tracker is provided, paired llm_request and llm_response events
     are appended to its JSONL log. When tracker is None, no logging
@@ -392,4 +398,8 @@ def send_message(
             metadata=metadata,
         )
 
-    return text, usage, generation_id
+    return ChatResult(
+        text=text,
+        usage=usage,
+        generation_id=generation_id,
+    )

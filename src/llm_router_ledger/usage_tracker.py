@@ -151,16 +151,18 @@ class UsageTracker:
                 subscriber(copy.deepcopy(entry))
             except Exception:
                 logger.exception(
-                    "Usage subscriber %r raised on"
-                    " event %s; the entry is already"
+                    "Usage subscriber %(subscriber)r raised on"
+                    " event %(event)s; the entry is already"
                     " in the ledger and the error is"
                     " being ignored",
-                    getattr(
-                        subscriber,
-                        "__name__",
-                        subscriber,
-                    ),
-                    entry.get("event", "?"),
+                    {
+                        "subscriber": getattr(
+                            subscriber,
+                            "__name__",
+                            subscriber,
+                        ),
+                        "event": entry.get("event", "?"),
+                    },
                 )
 
     def _open_stream(self) -> None:

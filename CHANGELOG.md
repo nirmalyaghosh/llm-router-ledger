@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Changed: `send_message()` and `create_embeddings()` return a `ChatResult` / `EmbeddingResult` namedtuple instead of a plain tuple; access fields as `.text` / `.vectors`, `.usage`, `.generation_id`.
+- Deprecated: positional unpacking of the result (`text, usage, gen_id = send_message(...)`) still works but logs a warning; it stops working in 0.3.0, when new fields land on either result type, so migrate to attribute access now.
+
 ## [0.1.4] - 2026-08-01
 
 - Added: `create_embeddings()` returning `(vectors, usage, generation_id)`; `EmbeddingAdapter` with an OpenAI-compatible implementation; `EndpointConfig.embedding_dimensions`, declarative metadata never sent on the wire but enforced on the response (`ProviderError` on a width mismatch); `modality` in JSONL, omitted on text calls so existing rows are unchanged; `usage_details` on embedding responses (`dimensions`, `embedding_count`, and `cost` / `is_byok` / `upstream_provider` where reported); 9 OpenRouter embedding models and local Ollama `qwen3-embedding:0.6b`; embedding smoke tests for both.

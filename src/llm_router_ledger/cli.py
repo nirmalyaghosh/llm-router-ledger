@@ -43,21 +43,22 @@ def _cmd_chat(args: argparse.Namespace) -> int:
             project_id=args.project_id,
         )
     try:
-        text, usage, gen_id = send_message(
+        result = send_message(
             endpoint_name=args.endpoint,
             system=args.system,
             user=args.user,
             tracker=tracker,
             purpose="cli-chat",
         )
-        print(text)
+        print(result.text)
         if tracker is not None:
+            usage = result.usage
             print(
                 f"\n[logged] tokens:"
                 f" {usage['prompt_tokens']}p"
                 f" + {usage['completion_tokens']}c"
                 f" = {usage['total_tokens']}t"
-                f" | id: {gen_id}",
+                f" | id: {result.generation_id}",
                 file=sys.stderr,
             )
     finally:

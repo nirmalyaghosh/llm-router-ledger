@@ -250,25 +250,25 @@ def test_create_embeddings_omits_expected_dimensions_when_unset(
     assert kwargs["expected_dimensions"] is None
 
 
-def test_create_embeddings_returns_adapter_tuple(
+def test_create_embeddings_returns_adapter_result(
     monkeypatch: pytest.MonkeyPatch,
     embedding_config: LLMConfig,
 ) -> None:
     """
-    The caller gets the adapter's tuple unchanged, including the
-    embedding extras in usage. Only the ledger splits them out.
+    The caller gets the adapter's usage unchanged in result.usage,
+    including the embedding extras. Only the ledger splits them out.
     """
     _patch_embedding_adapter(monkeypatch)
-    vectors, usage, generation_id = create_embeddings(
+    result = create_embeddings(
         endpoint_name="embed-with-dims",
         texts=["a", "b"],
         config=embedding_config,
     )
-    assert vectors == [[0.1, 0.2], [0.3, 0.4]]
-    assert usage["total_tokens"] == 9
-    assert usage["dimensions"] == 2
-    assert usage["cost"] == 4.5e-08
-    assert generation_id == "gen-emb-abc123"
+    assert result.vectors == [[0.1, 0.2], [0.3, 0.4]]
+    assert result.usage["total_tokens"] == 9
+    assert result.usage["dimensions"] == 2
+    assert result.usage["cost"] == 4.5e-08
+    assert result.generation_id == "gen-emb-abc123"
 
 
 def test_create_embeddings_splits_usage_into_details(

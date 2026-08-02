@@ -36,7 +36,7 @@ def main() -> None:
     )
     for ep in available:
         try:
-            text, usage, _ = send_message(
+            result = send_message(
                 endpoint_name=ep.name,
                 system="You are concise.",
                 user="Say hello in one short sentence.",
@@ -47,8 +47,9 @@ def main() -> None:
         except Exception as exc:
             print(f"[{ep.name}] FAILED: {exc}")
             continue
-        preview = text[:80].replace("\n", " ")
-        print(f"[{ep.name}] tokens={usage['total_tokens']} text={preview!r}")
+        preview = result.text[:80].replace("\n", " ")
+        tokens = result.usage["total_tokens"]
+        print(f"[{ep.name}] tokens={tokens} text={preview!r}")
     tracker.close()
 
 
