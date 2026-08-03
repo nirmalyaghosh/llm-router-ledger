@@ -25,24 +25,32 @@ def _patch_adapter(
     monkeypatch: pytest.MonkeyPatch,
     response_text: str = "hello world",
     generation_id: str = "gen-abc123",
+    extra_usage: dict[str, object] | None = None,
 ) -> MagicMock:
     """
     Helper function used to mock both get_client and _select_adapter so
     send_message runs entirely offline. Returns the fake adapter so tests
     can inspect adapter.send.call_args.
+
+    extra_usage merges into the base token dict, for tests exercising
+    how send_message splits cost / is_byok / reasoning / cache detail
+    keys into usage_details.
     """
     monkeypatch.setattr(
         "llm_router_ledger.dispatcher.get_client",
         lambda **kw: MagicMock(),
     )
+    usage = {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+    }
+    if extra_usage:
+        usage.update(extra_usage)
     fake = MagicMock()
     fake.send.return_value = (
         response_text,
-        {
-            "prompt_tokens": 5,
-            "completion_tokens": 7,
-            "total_tokens": 12,
-        },
+        usage,
         generation_id,
     )
     monkeypatch.setattr(
@@ -435,6 +443,55 @@ def test_send_message_returns_adapter_result(
     assert result.text == "hello world"
     assert result.usage["total_tokens"] == 12
     assert result.generation_id == "gen-abc123"
+
+
+def test_send_message_splits_usage_details(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    The ledger's usage block holds only the three normalised token
+    keys; everything else the adapter reported (cost, is_byok, and the
+    flattened reasoning / cache detail keys) lands in usage_details,
+    matching how create_embeddings already splits its own extras.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(
+        monkeypatch,
+        extra_usage={
+            "cost": 0.0012,
+            "is_byok": False,
+            "completion_reasoning_tokens": 40,
+            "prompt_cached_tokens": 20,
+        },
+    )
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    send_message(
+        endpoint_name="ollama-local",
+        system="sys",
+        user="usr",
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    response = entries[1]
+    assert response["usage"] == {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+    }
+    assert response["usage_details"] == {
+        "cost": 0.0012,
+        "is_byok": False,
+        "completion_reasoning_tokens": 40,
+        "prompt_cached_tokens": 20,
+    }
 
 
 def test_send_message_unknown_endpoint_raises(

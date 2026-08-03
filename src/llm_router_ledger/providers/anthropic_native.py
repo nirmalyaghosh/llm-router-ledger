@@ -42,10 +42,15 @@ class AnthropicAdapter(ProviderAdapter):
         user_id: str | None = None,
         extra_body: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, int], str]:
+    ) -> tuple[str, dict[str, Any], str]:
         """
         Send system + user to Anthropic Messages API and return
         (response_text, usage_dict, generation_id).
+
+        usage_dict carries only the three normalised token keys; the
+        Messages API reports no cost, cache, or reasoning detail on an
+        ordinary call the way OpenRouter does, so there is nothing else
+        to add.
 
         generation_id is response.id (a `msg_*`-prefixed string); the
         downstream tracker routes it to provider_response_id since it

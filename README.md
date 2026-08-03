@@ -55,6 +55,7 @@ result = send_message(
 ```
 
 - `send_message()` returns a `ChatResult` with `.text`, `.usage`, and `.generation_id`.
+- `.usage` adds `cost`, `is_byok`, and `upstream_provider` to the token keys when the provider reports them, plus flattened reasoning / cache detail keys (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`); see [JSONL ledger schema](#jsonl-ledger-schema).
 - `UsageTracker` appends paired `llm_request` / `llm_response` events to the JSONL log, stamped with `project_id`, `run_tag`, `run_label`, and `purpose` for later grouping.
 
 ## Embeddings
@@ -164,13 +165,11 @@ tracker.subscribe(lambda entry: my_container.upsert_item(entry))
 - Both share a `request_id` so they can be paired. Top-level fields on each event include `project_id`, `provider`, `model`, `purpose`, `run_tag`, `run_label`, and `timestamp`.
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
 - A failed call leaves an `llm_request` with no matching `llm_response`, because the request is logged before the call is made. Readers should expect unpaired requests.
+- `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
+  - **Chat calls** (OpenAI-compatible providers): `cost`, `is_byok`, and `upstream_provider` where available, plus the flattened contents of `completion_tokens_details` / `prompt_tokens_details` under a `completion_` / `prompt_` prefix (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`). The Anthropic adapter reports none of this, so Anthropic rows carry no `usage_details`.
+  - **Embedding calls**: `dimensions` and `embedding_count` always, plus `cost`, `is_byok` and `upstream_provider` where available.
 
-**Embedding calls** add two fields:
-
-- `modality: "embedding"` on both events. The key is omitted entirely on text calls, so existing rows are unchanged and an absent `modality` means text.
-- `usage_details` on the response, holding everything the provider reported beyond the three token keys: `dimensions` and `embedding_count` always, and `cost`, `is_byok` and `upstream_provider` where available. `usage` keeps the same fixed three-key shape across both modalities.
-
-The response preview is empty and `response_length` is 0 for embeddings, since an embedding response carries no text. Neither the input text in full nor the vectors are ever written to the ledger.
+**Embedding calls** additionally set `modality: "embedding"` on both events. The key is omitted entirely on text calls, so existing rows are unchanged and an absent `modality` means text. The response preview is empty and `response_length` is 0 for embeddings, since an embedding response carries no text. Neither the input text in full nor the vectors are ever written to the ledger.
 
 **Identifying a response for billing reconciliation:** the response id is routed to one of two fields based on prefix:
 

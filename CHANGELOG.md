@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Changed: `send_message()` and `create_embeddings()` return a `ChatResult` / `EmbeddingResult` namedtuple instead of a plain tuple; access fields as `.text` / `.vectors`, `.usage`, `.generation_id`.
-- Deprecated: positional unpacking of the result (`text, usage, gen_id = send_message(...)`) still works but logs a warning; it stops working in 0.3.0, when new fields land on either result type, so migrate to attribute access now.
+- Added: `usage_details` on chat responses (`cost`, `is_byok`, `upstream_provider` where reported, plus `completion_tokens_details` / `prompt_tokens_details` flattened to `completion_*` / `prompt_*` keys, zero/null omitted), same split as embedding responses.
+- Changed: `send_message()` and `create_embeddings()` return a `ChatResult` / `EmbeddingResult` namedtuple; access as `.text` / `.vectors`, `.usage`, `.generation_id`.
+- Deprecated: positional unpacking of the result tuple (logs a warning on each use); removed in 0.3.0 when new fields land on either result type.
 
 ## [0.1.4] - 2026-08-01
 

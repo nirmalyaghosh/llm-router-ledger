@@ -26,6 +26,47 @@ from llm_router_ledger.providers._base import (
 
 ENCODING_FORMAT = "float"
 
+# completion_tokens_details and prompt_tokens_details field names, per
+# OpenRouter's chat completion response. audio_tokens appears in both
+# blocks with a different meaning in each, which is why every key is
+# flattened with a prompt_ or completion_ prefix rather than merged.
+_COMPLETION_DETAIL_KEYS = (
+    "accepted_prediction_tokens",
+    "audio_tokens",
+    "image_tokens",
+    "reasoning_tokens",
+    "rejected_prediction_tokens",
+)
+_PROMPT_DETAIL_KEYS = (
+    "audio_tokens",
+    "cache_write_tokens",
+    "cached_tokens",
+    "video_tokens",
+)
+
+
+def _flatten_detail(
+    detail: Any,
+    keys: tuple[str, ...],
+    prefix: str,
+) -> dict[str, Any]:
+    """
+    Helper function used to flatten one nested usage detail block
+    (completion_tokens_details or prompt_tokens_details) into prefixed
+    top-level keys. Keys whose value is zero, null, or absent are
+    omitted, matching how the embedding adapter only writes cost,
+    is_byok, and upstream_provider when the provider actually reports
+    them.
+    """
+    if detail is None:
+        return {}
+    flattened: dict[str, Any] = {}
+    for key in keys:
+        value = getattr(detail, key, None)
+        if value:
+            flattened[f"{prefix}{key}"] = value
+    return flattened
+
 
 class OpenAICompatAdapter(ProviderAdapter):
     """
@@ -45,15 +86,21 @@ class OpenAICompatAdapter(ProviderAdapter):
         user_id: str | None = None,
         extra_body: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, int], str]:
+    ) -> tuple[str, dict[str, Any], str]:
         """
         Send system + user to an OpenAI-compat endpoint and return
         (response_text, usage_dict, generation_id).
 
-        usage_dict has prompt_tokens, completion_tokens, total_tokens,
-        all zero if the provider omits usage. generation_id is
-        response.id; the downstream tracker routes "gen-" prefixed IDs
-        to generation_id and everything else to provider_response_id.
+        usage_dict always has prompt_tokens, completion_tokens, and
+        total_tokens, all zero if the provider omits usage. When the
+        provider reports more, usage_dict also carries cost, is_byok,
+        and upstream_provider (mirroring the embedding adapter), plus
+        the flattened contents of completion_tokens_details and
+        prompt_tokens_details under a completion_ / prompt_ prefix
+        (e.g. completion_reasoning_tokens, prompt_cached_tokens).
+        generation_id is response.id; the downstream tracker routes
+        "gen-" prefixed IDs to generation_id and everything else to
+        provider_response_id.
 
         user_id is forwarded as the SDK's "user" field (e.g. OpenRouter
         run tag). extra_body is passed through verbatim for
@@ -91,7 +138,7 @@ class OpenAICompatAdapter(ProviderAdapter):
             or ""
         )
         raw = response.usage
-        usage: dict[str, int] = {
+        usage: dict[str, Any] = {
             k: (
                 getattr(raw, k, 0)
                 if raw is not None
@@ -103,6 +150,60 @@ class OpenAICompatAdapter(ProviderAdapter):
                 "total_tokens",
             )
         }
+        cost = (
+            getattr(raw, "cost", None)
+            if raw is not None
+            else None
+        )
+        if cost is not None:
+            usage["cost"] = cost
+        is_byok = (
+            getattr(raw, "is_byok", None)
+            if raw is not None
+            else None
+        )
+        if is_byok is not None:
+            usage["is_byok"] = is_byok
+        completion_details = (
+            getattr(
+                raw,
+                "completion_tokens_details",
+                None,
+            )
+            if raw is not None
+            else None
+        )
+        usage.update(
+            _flatten_detail(
+                completion_details,
+                _COMPLETION_DETAIL_KEYS,
+                "completion_",
+            )
+        )
+        prompt_details = (
+            getattr(
+                raw,
+                "prompt_tokens_details",
+                None,
+            )
+            if raw is not None
+            else None
+        )
+        usage.update(
+            _flatten_detail(
+                prompt_details,
+                _PROMPT_DETAIL_KEYS,
+                "prompt_",
+            )
+        )
+        upstream = getattr(
+            response,
+            "provider",
+            None,
+        )
+        if upstream:
+            usage["upstream_provider"] = upstream
+
         return text, usage, response.id or ""
 
 

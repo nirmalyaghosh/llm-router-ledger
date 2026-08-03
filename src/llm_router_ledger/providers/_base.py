@@ -77,15 +77,19 @@ class ProviderAdapter(ABC):
         user_id: str | None = None,
         extra_body: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, int], str]:
+    ) -> tuple[str, dict[str, Any], str]:
         """
         Send system + user to the provider and return (response_text,
         usage_dict, generation_id).
 
-        usage_dict is normalised to keys prompt_tokens, completion_tokens,
-        total_tokens. generation_id is the provider's response identifier,
-        or "" if the provider does not return one. When timeout_seconds
-        is None the client-level default applies.
+        usage_dict always carries prompt_tokens, completion_tokens, and
+        total_tokens. Adapters that can report more (reasoning tokens,
+        cache pricing, cost) add it to the same dict under its own key;
+        the dispatcher splits the three normalised keys from the rest
+        before logging, keeping the rest under usage_details. generation_id
+        is the provider's response identifier, or "" if the provider does
+        not return one. When timeout_seconds is None the client-level
+        default applies.
 
         system may be None for user-only calls. user_id is forwarded as
         the SDK's "user" field (end-user identifier; OpenRouter also uses

@@ -168,18 +168,20 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     return OpenAICompatEmbeddingAdapter()
 
 
-def _split_embedding_usage(
+def _split_usage(
     usage: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
-    Helper function used to divide an embedding adapter's usage dict into
-    the three normalised token keys the ledger's usage block holds and
-    the remainder, which belongs in usage_details (dimensions,
-    embedding_count, cost, is_byok, upstream_provider).
+    Helper function used to divide an adapter's usage dict into the
+    three normalised token keys the ledger's usage block holds and the
+    remainder, which belongs in usage_details (e.g. dimensions and
+    embedding_count for create_embeddings; cost, is_byok, and the
+    flattened cache/reasoning detail keys for send_message).
 
     The split is by token key rather than by a list of known extras, so a
     value a provider starts returning later lands in usage_details on its
-    own instead of being silently dropped.
+    own instead of being silently dropped. Modality-agnostic: the same
+    function serves both entry points.
     """
     tokens = {
         key: value
@@ -275,7 +277,7 @@ def create_embeddings(
 
     if tracker is not None:
         token_usage, usage_details = (
-            _split_embedding_usage(usage)
+            _split_usage(usage)
         )
         # response_text is empty because an embedding response carries no
         # text: recording a stand-in would put a fabricated
@@ -321,6 +323,15 @@ def send_message(
     Send a system + user message to the named endpoint and return a
     ChatResult.
 
+    result.usage carries the normalised prompt_tokens, completion_tokens,
+    and total_tokens keys plus whatever else the provider reported: cost,
+    is_byok, and upstream_provider when available, and the flattened
+    contents of completion_tokens_details / prompt_tokens_details under a
+    completion_ / prompt_ prefix (e.g. completion_reasoning_tokens,
+    prompt_cached_tokens). The caller gets all of it; the ledger splits
+    it, keeping the token keys in the usage block and the rest under
+    usage_details, the same rule create_embeddings follows.
+
     When tracker is provided, paired llm_request and llm_response events
     are appended to its JSONL log. When tracker is None, no logging
     happens.
@@ -341,8 +352,8 @@ def send_message(
     so the endpoint field has no effect on provider "anthropic".
 
     Raises EndpointNotFoundError if the endpoint name is missing, and
-    NotImplementedError if the endpoint points at the Anthropic provider
-    (the Anthropic adapter lands in a later minor release).
+    NotImplementedError if the endpoint's provider has no verified chat
+    adapter.
     """
     config, ep = _resolve_endpoint(
         config=config,
@@ -387,14 +398,18 @@ def send_message(
     )
 
     if tracker is not None:
+        token_usage, usage_details = (
+            _split_usage(usage)
+        )
         tracker.log_response(
             request_id=request_id,
             model=model,
             response_text=text,
-            usage=usage,
+            usage=token_usage,
             generation_id=generation_id,
             purpose=purpose,
             provider=ep.provider,
+            usage_details=usage_details,
             metadata=metadata,
         )
 
