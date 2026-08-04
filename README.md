@@ -57,6 +57,7 @@ result = send_message(
 - `send_message()` returns a `ChatResult` with `.text`, `.usage`, and `.generation_id`.
 - `.usage` adds `cost`, `is_byok`, and `upstream_provider` to the token keys when the provider reports them, plus flattened reasoning / cache detail keys (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`); see [JSONL ledger schema](#jsonl-ledger-schema).
 - `UsageTracker` appends paired `llm_request` / `llm_response` events to the JSONL log, stamped with `project_id`, `run_tag`, `run_label`, and `purpose` for later grouping.
+- Prompt and response previews are redacted by default; pass `preview_length` to opt in to storing truncated text, see [JSONL ledger schema](#jsonl-ledger-schema).
 
 ## Embeddings
 
@@ -164,6 +165,7 @@ tracker.subscribe(lambda entry: my_container.upsert_item(entry))
 - `UsageTracker` writes two events per `send_message()` or `create_embeddings()` call: an `llm_request` before the call, and an `llm_response` after.
 - Both share a `request_id` so they can be paired. Top-level fields on each event include `project_id`, `provider`, `model`, `purpose`, `run_tag`, `run_label`, and `timestamp`.
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
+- Previews are redacted by default: `system_prompt_preview`, `user_prompt_preview`, and `response_preview` are written as `"[REDACTED]"` when the underlying text is non-empty, `""` when it genuinely is empty. Pass `preview_length` (a positive character count) to `UsageTracker()` to opt in to storing a truncated preview instead; the length and token counts are always recorded either way.
 - A failed call leaves an `llm_request` with no matching `llm_response`, because the request is logged before the call is made. Readers should expect unpaired requests.
 - `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
   - **Chat calls** (OpenAI-compatible providers): `cost`, `is_byok`, and `upstream_provider` where available, plus the flattened contents of `completion_tokens_details` / `prompt_tokens_details` under a `completion_` / `prompt_` prefix (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`). The Anthropic adapter reports none of this, so Anthropic rows carry no `usage_details`.

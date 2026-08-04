@@ -54,7 +54,7 @@ class UsageTracker:
         run_tag: str | None = None,
         run_label: str | None = None,
         default_purpose: str = "",
-        preview_length: int = 200,
+        preview_length: int = 0,
         counter_width: int = 4,
         rotate_daily: bool = False,
         backup_count: int = 30,
@@ -65,6 +65,13 @@ class UsageTracker:
         The parent directory of log_path is created if it does not exist.
         run_tag and run_label default to the LRL_RUN_TAG and LRL_RUN_LABEL
         environment variables when not passed explicitly.
+
+        preview_length defaults to 0: prompt and response previews are
+        redacted (written as "[REDACTED]" when the underlying text is
+        non-empty, "" when it genuinely is empty) so no call content
+        reaches the ledger unless a caller opts in. Pass a positive value
+        to store up to that many characters of each prompt and response,
+        truncated with a trailing "..." when the text is longer.
         """
         self._log_path = Path(log_path)
         self._log_path.parent.mkdir(
@@ -128,7 +135,14 @@ class UsageTracker:
         Helper function used to truncate a long prompt or response to
         preview_length chars, suffixed with "..." when truncation actually
         happened.
+
+        preview_length <= 0 means previews are redacted: non-empty text
+        becomes "[REDACTED]" rather than "", so a reader can tell content
+        was withheld apart from content that was never there (e.g. an
+        embedding response, or no system prompt).
         """
+        if self._preview_length <= 0:
+            return "[REDACTED]" if text else ""
         if len(text) <= self._preview_length:
             return text
         return (

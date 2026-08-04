@@ -154,9 +154,14 @@ def test_log_path_parent_auto_mkdir(tmp_path: Path) -> None:
 def test_log_request_writes_expected_fields(tmp_log_path: Path) -> None:
     """
     A single log_request call appends one llm_request event with the
-    documented fields.
+    documented fields. preview_length is opted in explicitly here so the
+    preview fields carry real text rather than the redacted default.
     """
-    tracker = UsageTracker(log_path=tmp_log_path, project_id="my-proj")
+    tracker = UsageTracker(
+        log_path=tmp_log_path,
+        project_id="my-proj",
+        preview_length=200,
+    )
     request_id = tracker.log_request(
         model="gpt-4.1-nano",
         system_prompt="sys",
@@ -175,6 +180,86 @@ def test_log_request_writes_expected_fields(tmp_log_path: Path) -> None:
     assert e["system_prompt_preview"] == "sys"
     assert e["user_prompt_preview"] == "hi"
     assert e["user_prompt_length"] == 2
+
+
+def test_preview_truncates_text_over_the_limit(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Text longer than preview_length is cut to that many characters with
+    a trailing "...".
+    """
+    tracker = UsageTracker(
+        log_path=tmp_log_path,
+        project_id="p",
+        preview_length=5,
+    )
+    tracker.log_request(
+        model="m",
+        system_prompt="",
+        user_prompt="abcdefgh",
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["user_prompt_preview"] == "abcde..."
+
+
+def test_previews_redacted_by_default(tmp_log_path: Path) -> None:
+    """
+    With no preview_length passed, non-empty prompt and response text is
+    withheld from the ledger as "[REDACTED]" rather than stored, so a
+    caller must opt in before any call content reaches disk.
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="secret system prompt",
+        user_prompt="secret user prompt",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="secret response",
+        usage={
+            "prompt_tokens": 1,
+            "completion_tokens": 2,
+            "total_tokens": 3,
+        },
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["system_prompt_preview"] == "[REDACTED]"
+    assert entries[0]["user_prompt_preview"] == "[REDACTED]"
+    assert entries[0]["user_prompt_length"] == 18
+    assert entries[1]["response_preview"] == "[REDACTED]"
+    assert entries[1]["response_length"] == 15
+
+
+def test_previews_stay_empty_when_content_is_empty(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Redaction only replaces text that actually exists. An absent system
+    prompt and an empty response (e.g. an embedding call) still preview
+    as "", distinguishing "nothing was there" from "content was
+    withheld".
+    """
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    request_id = tracker.log_request(
+        model="m",
+        system_prompt="",
+        user_prompt="u",
+    )
+    tracker.log_response(
+        request_id=request_id,
+        model="m",
+        response_text="",
+        usage={"prompt_tokens": 1, "total_tokens": 1},
+    )
+    tracker.close()
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["system_prompt_preview"] == ""
+    assert entries[1]["response_preview"] == ""
 
 
 def test_log_response_routes_gen_prefix(tmp_log_path: Path) -> None:
