@@ -50,10 +50,10 @@ def test_cost_estimate_basic() -> None:
     assert actual == pytest.approx(0.005)
 
 
-def test_cost_estimate_cache_hit_uses_cached_rate() -> None:
+def test_cost_estimate_fully_cached_uses_cache_rate() -> None:
     """
-    When cache_hit is True and a cache rate is set, the cache rate
-    replaces the regular input rate.
+    When every input token is cached, the cache rate replaces the
+    regular input rate entirely.
     """
     cost = CostConfig(
         input_per_1m=1.0,
@@ -63,9 +63,107 @@ def test_cost_estimate_cache_hit_uses_cached_rate() -> None:
     actual = cost.estimate_cost(
         input_tokens=1000,
         output_tokens=1000,
-        cache_hit=True,
+        cached_tokens=1000,
     )
     assert actual == pytest.approx(0.0021)
+
+
+def test_cost_estimate_partial_cache_hit_mixes_rates() -> None:
+    """
+    A real call can mix cached and uncached input in one prompt; only
+    the cached subset bills at the cache rate.
+    """
+    cost = CostConfig(
+        input_per_1m=1.0,
+        output_per_1m=2.0,
+        cache_hit_input_per_1m=0.1,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=500,
+        cached_tokens=400,
+    )
+    assert actual == pytest.approx(0.00164)
+
+
+def test_cost_estimate_cache_write_uses_cache_write_rate() -> None:
+    """
+    cache_write_tokens bills at cache_write_input_per_1m, which is
+    typically higher than the base input rate.
+    """
+    cost = CostConfig(
+        input_per_1m=1.0,
+        output_per_1m=2.0,
+        cache_write_input_per_1m=3.0,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cache_write_tokens=300,
+    )
+    assert actual == pytest.approx(0.0016)
+
+
+def test_cost_estimate_missing_cache_write_rate_uses_input_rate() -> None:
+    """
+    With no cache_write_input_per_1m configured, cache-write tokens
+    bill at the standard input rate instead.
+    """
+    cost = CostConfig(input_per_1m=2.0, output_per_1m=0.0)
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cache_write_tokens=300,
+    )
+    assert actual == pytest.approx(0.002)
+
+
+def test_cost_estimate_zero_cache_rate_is_free_not_unset() -> None:
+    """
+    An explicit cache_hit_input_per_1m of 0.0 is a genuinely free cache
+    tier and must not be treated as "unset" and fall back to the
+    regular input rate.
+    """
+    cost = CostConfig(
+        input_per_1m=5.0,
+        output_per_1m=0.0,
+        cache_hit_input_per_1m=0.0,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cached_tokens=1000,
+    )
+    assert actual == 0.0
+
+
+def test_cost_estimate_raises_when_cached_tokens_exceed_input() -> None:
+    """
+    cached_tokens alone exceeding input_tokens raises rather than
+    silently producing a negative charge for the remainder.
+    """
+    cost = CostConfig(input_per_1m=1.0, output_per_1m=2.0)
+    with pytest.raises(ValueError):
+        cost.estimate_cost(
+            input_tokens=100,
+            output_tokens=0,
+            cached_tokens=150,
+        )
+
+
+def test_cost_estimate_raises_when_cache_tokens_sum_exceeds_input() -> None:
+    """
+    cached_tokens and cache_write_tokens together exceeding
+    input_tokens also raises, even when neither alone does.
+    """
+    cost = CostConfig(input_per_1m=1.0, output_per_1m=2.0)
+    with pytest.raises(ValueError):
+        cost.estimate_cost(
+            input_tokens=100,
+            output_tokens=0,
+            cached_tokens=60,
+            cache_write_tokens=60,
+        )
 
 
 def test_embedding_dimensions_loads_and_defaults_to_none(

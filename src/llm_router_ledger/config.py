@@ -72,6 +72,7 @@ class CostConfig(BaseModel):
     input_per_1m: float
     output_per_1m: float
     cache_hit_input_per_1m: float | None = None
+    cache_write_input_per_1m: float | None = None
     pricing_url: str | None = None
     pricing_checked: date | None = None
     pricing_notes: str | None = None
@@ -91,22 +92,51 @@ class CostConfig(BaseModel):
         self,
         input_tokens: int,
         output_tokens: int,
-        cache_hit: bool = False,
+        *,
+        cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> float:
         """
         Estimate cost in USD for a single request.
+
+        input_tokens is the full prompt token count, matching how a
+        provider reports it; cached_tokens and cache_write_tokens are
+        the subsets of it billed at cache_hit_input_per_1m and
+        cache_write_input_per_1m respectively, since a real call can mix
+        cached, cache-write, and uncached input in one prompt rather
+        than being purely one or the other. Whichever rate is unset
+        falls back to input_per_1m, including when it is explicitly 0.0
+        (a genuinely free tier, not "unset").
+
+        Raises ValueError if cached_tokens plus cache_write_tokens
+        exceeds input_tokens, which would otherwise silently produce a
+        negative charge for the remaining uncached tokens.
         """
-        if (
-            cache_hit
-            and self.cache_hit_input_per_1m
-        ):
-            input_rate = (
-                self.cache_hit_input_per_1m
+        if cached_tokens + cache_write_tokens > input_tokens:
+            raise ValueError(
+                f"cached_tokens ({cached_tokens}) plus"
+                f" cache_write_tokens ({cache_write_tokens})"
+                f" exceeds input_tokens ({input_tokens})"
             )
-        else:
-            input_rate = self.input_per_1m
+        uncached_tokens = (
+            input_tokens
+            - cached_tokens
+            - cache_write_tokens
+        )
+        cache_hit_rate = (
+            self.cache_hit_input_per_1m
+            if self.cache_hit_input_per_1m is not None
+            else self.input_per_1m
+        )
+        cache_write_rate = (
+            self.cache_write_input_per_1m
+            if self.cache_write_input_per_1m is not None
+            else self.input_per_1m
+        )
         return (
-            input_tokens * input_rate
+            uncached_tokens * self.input_per_1m
+            + cached_tokens * cache_hit_rate
+            + cache_write_tokens * cache_write_rate
             + output_tokens * self.output_per_1m
         ) / 1_000_000
 

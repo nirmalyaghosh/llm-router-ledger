@@ -7,8 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added: `usage_details` on chat responses (`cost`, `is_byok`, `upstream_provider` where reported, plus `completion_tokens_details` / `prompt_tokens_details` flattened to `completion_*` / `prompt_*` keys, zero/null omitted), same split as embedding responses.
-- Changed: `send_message()` and `create_embeddings()` return a `ChatResult` / `EmbeddingResult` namedtuple; access as `.text` / `.vectors`, `.usage`, `.generation_id`.
+- Added: `usage_details` on chat responses (`cost`, `is_byok`, `upstream_provider` where reported, plus `completion_tokens_details` / `prompt_tokens_details` flattened to `completion_*` / `prompt_*` keys, zero/null omitted), same split as embedding responses; `CostConfig.cache_write_input_per_1m`.
+- Changed: `send_message()` and `create_embeddings()` return a `ChatResult` / `EmbeddingResult` namedtuple; access as `.text` / `.vectors`, `.usage`, `.generation_id`. `CostConfig.estimate_cost()` takes `cached_tokens` / `cache_write_tokens` counts instead of a `cache_hit` bool, so a single call can mix cached, cache-write, and uncached input; raises `ValueError` if `cached_tokens + cache_write_tokens > input_tokens`. An explicit `0.0` rate is now honored as free rather than treated as unset.
 - Deprecated: positional unpacking of the result tuple (logs a warning on each use); removed in 0.3.0 when new fields land on either result type.
 
 ## [0.1.4] - 2026-08-01
