@@ -81,8 +81,16 @@ def test_send_message_invokes_adapter_with_kwargs(
     )
     kwargs = fake.send.call_args.kwargs
     assert kwargs["model"] == "llama3.1"
-    assert kwargs["system"] == "sys"
-    assert kwargs["user"] == "usr"
+    assert kwargs["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "sys"}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "usr"}],
+        },
+    ]
     assert kwargs["max_tokens"] == 100
     assert kwargs["temperature"] == 0.2
 
@@ -114,15 +122,117 @@ def test_send_message_system_optional(
     sample_yaml_file: Path,
 ) -> None:
     """
-    system=None reaches the adapter unchanged so user-only calls (e.g.
-    JSON-mode prompts) work.
+    Leaving system unset produces a messages list with no system entry
+    at all, so user-only calls (e.g. JSON-mode prompts) work.
     """
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     fake = _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
     send_message(endpoint_name="ollama-local", user="u", config=config)
     kwargs = fake.send.call_args.kwargs
-    assert kwargs["system"] is None
+    assert kwargs["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "u"}]},
+    ]
+
+
+def test_send_message_messages_replaces_system_and_user(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+) -> None:
+    """
+    A call-level messages list replaces system/user outright rather
+    than merging with them, mirroring the extra_body replace-not-merge
+    rule; system and user are ignored entirely when messages is set.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    fake = _patch_adapter(monkeypatch)
+    config = load_config(sample_yaml_file)
+    custom_messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn one"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "reply one"}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn two"}],
+        },
+    ]
+    send_message(
+        endpoint_name="ollama-local",
+        system="ignored system",
+        user="ignored user",
+        messages=custom_messages,
+        config=config,
+    )
+    kwargs = fake.send.call_args.kwargs
+    assert kwargs["messages"] == custom_messages
+
+
+def test_send_message_requires_user_or_messages(
+    sample_yaml_file: Path,
+) -> None:
+    """
+    Calling send_message with neither user nor messages raises
+    ValueError rather than reaching the adapter with nothing to send.
+    """
+    config = load_config(sample_yaml_file)
+    with pytest.raises(ValueError):
+        send_message(endpoint_name="ollama-local", config=config)
+
+
+def test_send_message_logs_multi_turn_preview(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    With a messages call, the ledger's system_prompt_preview is the
+    joined text of every system-role message and user_prompt_preview is
+    the text of the last user-role message, the turn this call is
+    actually sending, not the entire replayed history.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(monkeypatch)
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(
+        log_path=tmp_log_path,
+        project_id="p",
+        preview_length=200,
+    )
+    send_message(
+        endpoint_name="ollama-local",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "be concise"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "turn one"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "reply one"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "turn two"}],
+            },
+        ],
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[0]["system_prompt_preview"] == "be concise"
+    assert entries[0]["user_prompt_preview"] == "turn two"
 
 
 def test_send_message_forwards_user_id_and_extra_body(

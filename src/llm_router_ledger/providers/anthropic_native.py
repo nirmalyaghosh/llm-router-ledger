@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from llm_router_ledger._messages import extract_system_text
 from llm_router_ledger.providers._base import ProviderAdapter
 
 
@@ -34,8 +35,7 @@ class AnthropicAdapter(ProviderAdapter):
         *,
         client: Any,
         model: str,
-        system: str | None,
-        user: str,
+        messages: list[dict[str, Any]],
         max_tokens: int = 4096,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
@@ -44,8 +44,15 @@ class AnthropicAdapter(ProviderAdapter):
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any], str]:
         """
-        Send system + user to Anthropic Messages API and return
+        Send messages to Anthropic Messages API and return
         (response_text, usage_dict, generation_id).
+
+        Any system-role entries in messages are pulled out and joined
+        into the top-level system parameter, since the Messages API
+        takes system as its own kwarg rather than a message in the
+        list; the remaining entries are forwarded as-is, since their
+        {"role", "content": [{"type": "text", "text": ...}]} shape
+        already matches Anthropic's TextBlockParam.
 
         usage_dict carries only the three normalised token keys; the
         Messages API reports no cost, cache, or reasoning detail on an
@@ -61,14 +68,18 @@ class AnthropicAdapter(ProviderAdapter):
         (no passthrough mechanism), response_format (Anthropic uses
         tool-use for structured output, not a response_format kwarg).
         """
+        system = extract_system_text(messages)
+        conversation = [
+            message
+            for message in messages
+            if message.get("role") != "system"
+        ]
         kwargs: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
-            "messages": [
-                {"role": "user", "content": user},
-            ],
+            "messages": conversation,
         }
-        if system is not None:
+        if system:
             kwargs["system"] = system
         if temperature is not None:
             kwargs["temperature"] = temperature

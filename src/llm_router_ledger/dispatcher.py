@@ -13,6 +13,11 @@ import copy
 
 from typing import Any
 
+from llm_router_ledger._messages import (
+    build_messages,
+    extract_system_text,
+    extract_text,
+)
 from llm_router_ledger.client_factory import (
     get_client,
     get_model_name,
@@ -116,6 +121,30 @@ def _resolve_extra_body(
     if chosen is None:
         return None
     return copy.deepcopy(chosen)
+
+
+def _resolve_messages(
+    *,
+    messages: list[dict[str, Any]] | None,
+    system: str | None,
+    user: str | None,
+) -> list[dict[str, Any]]:
+    """
+    Helper function used to pick the messages list for a single call. A
+    call-level messages list replaces system/user outright rather than
+    merging with them, mirroring the rule _resolve_extra_body already
+    follows for the endpoint/call layering.
+
+    Raises ValueError when neither messages nor user is supplied, since
+    a call needs some content to send.
+    """
+    if messages is not None:
+        return messages
+    if user is None:
+        raise ValueError(
+            "send_message requires either 'user' or 'messages'"
+        )
+    return build_messages(system=system, user=user)
 
 
 def _select_adapter(provider: str) -> ProviderAdapter:
@@ -306,8 +335,9 @@ def create_embeddings(
 def send_message(
     *,
     endpoint_name: str,
-    user: str,
+    user: str | None = None,
     system: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
     config: LLMConfig | None = None,
     tracker: UsageTracker | None = None,
     purpose: str = "",
@@ -320,8 +350,7 @@ def send_message(
     response_format: dict[str, Any] | None = None,
 ) -> ChatResult:
     """
-    Send a system + user message to the named endpoint and return a
-    ChatResult.
+    Send a message to the named endpoint and return a ChatResult.
 
     result.usage carries the normalised prompt_tokens, completion_tokens,
     and total_tokens keys plus whatever else the provider reported: cost,
@@ -336,8 +365,19 @@ def send_message(
     are appended to its JSONL log. When tracker is None, no logging
     happens.
 
-    system is optional; pass None for user-only calls (common with
-    JSON-mode prompts that embed all instructions in the user message).
+    system + user is the single-turn convenience form; system is
+    optional, pass None for user-only calls (common with JSON-mode
+    prompts that embed all instructions in the user message).
+
+    messages is the multi-turn form, for conversation history, tool
+    loops, or any call system/user cannot express. Each entry is
+    {"role": "system" | "user" | "assistant", "content":
+    [{"type": "text", "text": ...}]}, the OpenAI content-parts shape,
+    kept even though image parts are not supported yet so that adding
+    them later is additive. When messages is supplied it replaces
+    system and user outright rather than merging with them, the same
+    rule extra_body follows against its endpoint-level default. Exactly
+    one of messages or user must be supplied.
 
     user_id is forwarded as the SDK's "user" field (OpenRouter run
     tagging, OpenAI end-user identifier). extra_body is a vendor-specific
@@ -351,9 +391,9 @@ def send_message(
     itself. Note that the Anthropic adapter ignores extra_body entirely,
     so the endpoint field has no effect on provider "anthropic".
 
-    Raises EndpointNotFoundError if the endpoint name is missing, and
+    Raises EndpointNotFoundError if the endpoint name is missing,
     NotImplementedError if the endpoint's provider has no verified chat
-    adapter.
+    adapter, and ValueError if neither messages nor user is supplied.
     """
     config, ep = _resolve_endpoint(
         config=config,
@@ -363,6 +403,11 @@ def send_message(
     effective_extra_body = _resolve_extra_body(
         call_value=extra_body,
         endpoint_value=ep.extra_body,
+    )
+    effective_messages = _resolve_messages(
+        messages=messages,
+        system=system,
+        user=user,
     )
     model = get_model_name(
         endpoint_name=endpoint_name,
@@ -375,10 +420,20 @@ def send_message(
 
     request_id = ""
     if tracker is not None:
+        latest_user_messages = [
+            message
+            for message in effective_messages
+            if message.get("role") == "user"
+        ]
+        latest_user_prompt = (
+            extract_text(latest_user_messages[-1].get("content"))
+            if latest_user_messages
+            else ""
+        )
         request_id = tracker.log_request(
             model=model,
-            system_prompt=system or "",
-            user_prompt=user,
+            system_prompt=extract_system_text(effective_messages),
+            user_prompt=latest_user_prompt,
             purpose=purpose,
             provider=ep.provider,
             metadata=metadata,
@@ -387,8 +442,7 @@ def send_message(
     text, usage, generation_id = adapter.send(
         client=client,
         model=model,
-        system=system,
-        user=user,
+        messages=effective_messages,
         max_tokens=max_tokens,
         temperature=temperature,
         timeout_seconds=timeout_seconds,

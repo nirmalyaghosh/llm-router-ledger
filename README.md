@@ -58,6 +58,22 @@ result = send_message(
 - `.usage` adds `cost`, `is_byok`, and `upstream_provider` to the token keys when the provider reports them, plus flattened reasoning / cache detail keys (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`); see [JSONL ledger schema](#jsonl-ledger-schema).
 - `UsageTracker` appends paired `llm_request` / `llm_response` events to the JSONL log, stamped with `project_id`, `run_tag`, `run_label`, and `purpose` for later grouping.
 - Prompt and response previews are redacted by default; pass `preview_length` to opt in to storing truncated text, see [JSONL ledger schema](#jsonl-ledger-schema).
+- For multi-turn conversations, tool loops, or anything `system` + `user` can't express, pass `messages` instead; it replaces `system` and `user` outright rather than merging with them:
+
+```python
+result = send_message(
+    endpoint_name="openrouter-mimo-v2.5",
+    messages=[
+        {"role": "system", "content": [{"type": "text", "text": "You are concise."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Explain prompt caching."}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "..."}]},
+        {"role": "user", "content": [{"type": "text", "text": "Now in one sentence."}]},
+    ],
+    tracker=tracker,
+)
+```
+
+Each entry is `{"role": ..., "content": [{"type": "text", "text": ...}]}`, the OpenAI content-parts shape. It's kept even though only `"text"` parts are supported today, so adding image input later is additive rather than another break.
 
 ## Embeddings
 

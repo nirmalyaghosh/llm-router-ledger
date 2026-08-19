@@ -39,41 +39,93 @@ def _fake_client(
     return client
 
 
-def test_adapter_omits_system_when_none() -> None:
+def _text_message(role: str, text: str) -> dict[str, object]:
     """
-    With system=None the SDK call omits the system kwarg entirely (rather
-    than passing system=None), matching Anthropic SDK convention for
-    user-only calls.
+    Helper function used to build one content-parts message, the shape
+    send_message's messages parameter and every adapter now share.
+    """
+    return {
+        "role": role,
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def test_adapter_omits_system_when_no_system_message() -> None:
+    """
+    With no system-role message in the list, the SDK call omits the
+    system kwarg entirely (rather than passing system="" or None),
+    matching Anthropic SDK convention for user-only calls.
     """
     client = _fake_client()
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system=None,
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     call_kwargs = client.messages.create.call_args.kwargs
     assert "system" not in call_kwargs
 
 
-def test_adapter_passes_system_as_top_level_param() -> None:
+def test_adapter_lifts_system_message_to_top_level_param() -> None:
     """
-    When system is provided it lands as the top-level system parameter,
-    not as a message in the messages list. This is the key shape
-    difference from OpenAI chat completions.
+    A system-role message is pulled out of messages and joined into the
+    top-level system parameter, since the Messages API takes system as
+    its own kwarg rather than a message in the list. This is the key
+    shape difference from OpenAI chat completions.
     """
     client = _fake_client()
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="You are concise.",
-        user="hi",
+        messages=[
+            _text_message("system", "You are concise."),
+            _text_message("user", "hi"),
+        ],
     )
     call_kwargs = client.messages.create.call_args.kwargs
     assert call_kwargs["system"] == "You are concise."
-    assert call_kwargs["messages"] == [
-        {"role": "user", "content": "hi"},
+    assert call_kwargs["messages"] == [_text_message("user", "hi")]
+
+
+def test_adapter_joins_multiple_system_messages() -> None:
+    """
+    More than one system-role message (unusual, but not forbidden by
+    the shape) joins into a single system string in order, rather than
+    only the first or last surviving.
+    """
+    client = _fake_client()
+    AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[
+            _text_message("system", "First."),
+            _text_message("system", "Second."),
+            _text_message("user", "hi"),
+        ],
+    )
+    call_kwargs = client.messages.create.call_args.kwargs
+    assert call_kwargs["system"] == "First.\nSecond."
+
+
+def test_adapter_forwards_multi_turn_history() -> None:
+    """
+    A multi-turn messages list (user, assistant, user) reaches the SDK
+    with every non-system entry preserved in order, so conversation
+    history round-trips unchanged.
+    """
+    client = _fake_client()
+    messages = [
+        _text_message("user", "first"),
+        _text_message("assistant", "reply"),
+        _text_message("user", "second"),
     ]
+    AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=messages,
+    )
+    call_kwargs = client.messages.create.call_args.kwargs
+    assert call_kwargs["messages"] == messages
 
 
 def test_adapter_silently_ignores_unsupported_kwargs() -> None:
@@ -87,8 +139,10 @@ def test_adapter_silently_ignores_unsupported_kwargs() -> None:
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="s",
-        user="u",
+        messages=[
+            _text_message("system", "s"),
+            _text_message("user", "u"),
+        ],
         user_id="run-tag-123",
         extra_body={"foo": "bar"},
         response_format={"type": "json_object"},
@@ -114,8 +168,10 @@ def test_adapter_translates_response_shape() -> None:
     text, usage, gen_id = AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="s",
-        user="u",
+        messages=[
+            _text_message("system", "s"),
+            _text_message("user", "u"),
+        ],
     )
     assert text == "hello world"
     assert usage == {

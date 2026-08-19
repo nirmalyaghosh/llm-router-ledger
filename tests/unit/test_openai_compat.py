@@ -71,6 +71,17 @@ def _fake_response(
     return SimpleNamespace(**kwargs)
 
 
+def _text_message(role: str, text: str) -> dict[str, object]:
+    """
+    Helper function used to build one content-parts message, the shape
+    send_message's messages parameter and every adapter now share.
+    """
+    return {
+        "role": role,
+        "content": [{"type": "text", "text": text}],
+    }
+
+
 def test_adapter_forwards_user_id_as_user() -> None:
     """
     The user_id kwarg lands as the SDK's "user" field on
@@ -80,8 +91,7 @@ def test_adapter_forwards_user_id_as_user() -> None:
     OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
         user_id="run-tag-123",
     )
     call_kwargs = client.chat.completions.create.call_args.kwargs
@@ -97,8 +107,7 @@ def test_adapter_forwards_extra_body() -> None:
     OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
         extra_body={"provider": {"sort": "latency"}},
     )
     call_kwargs = client.chat.completions.create.call_args.kwargs
@@ -114,30 +123,32 @@ def test_adapter_forwards_response_format() -> None:
     OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
         response_format={"type": "json_object"},
     )
     call_kwargs = client.chat.completions.create.call_args.kwargs
     assert call_kwargs["response_format"] == {"type": "json_object"}
 
 
-def test_adapter_omits_system_message_when_none() -> None:
+def test_adapter_forwards_messages_unchanged() -> None:
     """
-    With system=None the messages list contains only the user role,
-    matching the OpenAI SDK convention for user-only calls.
+    messages reaches the SDK exactly as built by the dispatcher: no
+    per-role conversion happens in this adapter, since the
+    content-parts shape already matches what the SDK expects for
+    system, user, and assistant roles alike.
     """
     client = _fake_client()
+    messages = [
+        _text_message("system", "s"),
+        _text_message("user", "u"),
+    ]
     OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system=None,
-        user="u",
+        messages=messages,
     )
     call_kwargs = client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["messages"] == [
-        {"role": "user", "content": "u"},
-    ]
+    assert call_kwargs["messages"] == messages
 
 
 def test_adapter_omits_user_and_extra_body_when_none() -> None:
@@ -149,8 +160,7 @@ def test_adapter_omits_user_and_extra_body_when_none() -> None:
     OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     call_kwargs = client.chat.completions.create.call_args.kwargs
     assert "user" not in call_kwargs
@@ -190,8 +200,7 @@ def test_adapter_captures_cost_and_reasoning_detail() -> None:
     _, usage_out, _ = OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     assert usage_out["cost"] == 0.0012
     assert usage_out["is_byok"] is False
@@ -224,8 +233,7 @@ def test_adapter_omits_optional_usage_keys_when_absent() -> None:
     _, usage_out, _ = OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     assert usage_out == {
         "prompt_tokens": 1,
@@ -243,8 +251,7 @@ def test_adapter_handles_missing_usage() -> None:
     _, usage_out, _ = OpenAICompatAdapter().send(
         client=client,
         model="m",
-        system="s",
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     assert usage_out == {
         "prompt_tokens": 0,

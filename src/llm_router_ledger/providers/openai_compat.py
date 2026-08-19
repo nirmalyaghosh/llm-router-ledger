@@ -78,8 +78,7 @@ class OpenAICompatAdapter(ProviderAdapter):
         *,
         client: Any,
         model: str,
-        system: str | None,
-        user: str,
+        messages: list[dict[str, Any]],
         max_tokens: int = 4096,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
@@ -88,8 +87,14 @@ class OpenAICompatAdapter(ProviderAdapter):
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any], str]:
         """
-        Send system + user to an OpenAI-compat endpoint and return
+        Send messages to an OpenAI-compat endpoint and return
         (response_text, usage_dict, generation_id).
+
+        messages is forwarded to the SDK unchanged: the content-parts
+        shape ({"content": [{"type": "text", "text": ...}]}) the
+        dispatcher builds is exactly what ChatCompletionMessageParam
+        accepts for system, user, and assistant roles alike, so no
+        per-role conversion is needed here.
 
         usage_dict always has prompt_tokens, completion_tokens, and
         total_tokens, all zero if the provider omits usage. When the
@@ -107,10 +112,6 @@ class OpenAICompatAdapter(ProviderAdapter):
         vendor-specific fields like OpenRouter's {"provider": {...}}
         routing hints.
         """
-        messages: list[dict[str, str]] = []
-        if system is not None:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": user})
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,

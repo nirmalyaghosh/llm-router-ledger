@@ -69,8 +69,7 @@ class ProviderAdapter(ABC):
         *,
         client: Any,
         model: str,
-        system: str | None,
-        user: str,
+        messages: list[dict[str, Any]],
         max_tokens: int = 4096,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
@@ -79,8 +78,17 @@ class ProviderAdapter(ABC):
         response_format: dict[str, Any] | None = None,
     ) -> tuple[str, dict[str, Any], str]:
         """
-        Send system + user to the provider and return (response_text,
+        Send messages to the provider and return (response_text,
         usage_dict, generation_id).
+
+        messages is already normalised by the dispatcher into the
+        OpenAI content-parts shape: each entry is
+        {"role": "system" | "user" | "assistant", "content":
+        [{"type": "text", "text": ...}]}. A "system" entry, if present,
+        may be anywhere in the list but is conventionally first;
+        adapters whose provider takes system as a top-level parameter
+        rather than a message (Anthropic) pull it out themselves via
+        llm_router_ledger._messages.extract_system_text.
 
         usage_dict always carries prompt_tokens, completion_tokens, and
         total_tokens. Adapters that can report more (reasoning tokens,
@@ -91,11 +99,10 @@ class ProviderAdapter(ABC):
         not return one. When timeout_seconds is None the client-level
         default applies.
 
-        system may be None for user-only calls. user_id is forwarded as
-        the SDK's "user" field (end-user identifier; OpenRouter also uses
-        this for request tagging). extra_body is a vendor-specific
-        passthrough dict (e.g. OpenRouter provider routing hints).
-        response_format requests structured output (e.g.
+        user_id is forwarded as the SDK's "user" field (end-user identifier;
+        OpenRouter also uses this for request tagging). extra_body is a
+        vendor-specific passthrough dict (e.g. OpenRouter provider routing
+        hints). response_format requests structured output (e.g.
         {"type": "json_object"} for OpenAI JSON mode). All optional;
         adapters that do not support them can ignore.
         """
