@@ -127,8 +127,9 @@ endpoints:
         enabled: false
 
   # Embedding endpoints via OpenRouter, called with create_embeddings()
-  # rather than send_message(). Three of the nine verified models are
-  # shown; the README lists the full set with dimensions and prices.
+  # rather than send_message(). All nine verified models are shown, in
+  # alphabetical order by endpoint name; dimensions and prices below
+  # match the README, both current as of 2026-07-29.
   #
   # output_per_1m is 0.00 throughout: embedding endpoints bill input
   # only and return no completion tokens.
@@ -138,6 +139,20 @@ endpoints:
   # call. It is not OpenAI's `dimensions` request parameter and does not
   # truncate anything; create_embeddings raises ProviderError if the
   # provider returns a different width.
+  openrouter-embed-bge-base-en-v1.5:
+    provider: openrouter
+    model: baai/bge-base-en-v1.5
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 512
+    embedding_dimensions: 768
+    cost:
+      input_per_1m: 0.005
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/baai/bge-base-en-v1.5
+      pricing_checked: "2026-07-29"
+    notes: English only, and the shortest context of the embedding set.
+
   openrouter-embed-bge-m3:
     provider: openrouter
     model: baai/bge-m3
@@ -151,6 +166,22 @@ endpoints:
       pricing_url: https://openrouter.ai/baai/bge-m3
       pricing_checked: "2026-07-29"
     notes: Multilingual.
+
+  openrouter-embed-mistral-embed-2312:
+    provider: openrouter
+    model: mistralai/mistral-embed-2312
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 8192
+    embedding_dimensions: 1024
+    cost:
+      input_per_1m: 0.10
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/mistralai/mistral-embed-2312
+      pricing_checked: "2026-07-29"
+    notes: >
+      The most expensive of the embedding set, at 10x bge-m3 for the
+      same width and context.
 
   # Free tier, so useful for trying create_embeddings() at no cost.
   openrouter-embed-nemotron-3-1b-free:
@@ -166,6 +197,64 @@ endpoints:
       pricing_url: https://openrouter.ai/nvidia/nemotron-3-embed-1b:free
       pricing_checked: "2026-07-29"
       pricing_notes: "Free tier. Rate limits apply."
+
+  openrouter-embed-pplx-v1-0.6b:
+    provider: openrouter
+    model: perplexity/pplx-embed-v1-0.6b
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 32000
+    embedding_dimensions: 1024
+    cost:
+      input_per_1m: 0.004
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/perplexity/pplx-embed-v1-0.6b
+      pricing_checked: "2026-07-29"
+    notes: Cheapest paid endpoint of the embedding set.
+
+  openrouter-embed-qwen3-4b:
+    provider: openrouter
+    model: qwen/qwen3-embedding-4b
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 32768
+    embedding_dimensions: 2560
+    cost:
+      input_per_1m: 0.02
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/qwen/qwen3-embedding-4b
+      pricing_checked: "2026-07-29"
+      pricing_notes: >
+        Priced above qwen3-embedding-8b despite being the smaller
+        model. Verified against the model page, not a transcription
+        slip.
+
+  openrouter-embed-qwen3-8b:
+    provider: openrouter
+    model: qwen/qwen3-embedding-8b
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 32768
+    embedding_dimensions: 4096
+    cost:
+      input_per_1m: 0.01
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/qwen/qwen3-embedding-8b
+      pricing_checked: "2026-07-29"
+    notes: Widest vector here, and half the price of the 4b.
+
+  openrouter-embed-text-embedding-3-large:
+    provider: openrouter
+    model: openai/text-embedding-3-large
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 8192
+    embedding_dimensions: 3072
+    cost:
+      input_per_1m: 0.13
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/openai/text-embedding-3-large
+      pricing_checked: "2026-07-29"
 
   openrouter-embed-text-embedding-3-small:
     provider: openrouter
