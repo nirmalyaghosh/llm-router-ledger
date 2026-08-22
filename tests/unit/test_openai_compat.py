@@ -49,9 +49,10 @@ def _fake_client(
 def _fake_response(
     *,
     usage: SimpleNamespace | None,
-    text: str = "ok",
+    text: str | None = "ok",
     response_id: str = "gen-abc",
     provider: str | None = None,
+    tool_calls: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
     """
     Helper function used to build a plain response object for the usage-
@@ -60,9 +61,17 @@ def _fake_response(
     getattr(obj, key, default) actually exercises the default path
     instead of MagicMock auto-vivifying a truthy child mock that would
     silently mask a bug in the extraction logic.
+
+    text is None and tool_calls is a list on a tool-call turn, matching
+    what the API returns there. The message carries no tool_calls
+    attribute at all unless one is passed, since an ordinary provider
+    response omits it entirely.
     """
+    message = SimpleNamespace(content=text)
+    if tool_calls is not None:
+        message.tool_calls = tool_calls
     kwargs: dict[str, object] = {
-        "choices": [SimpleNamespace(message=SimpleNamespace(content=text))],
+        "choices": [SimpleNamespace(message=message)],
         "id": response_id,
         "usage": usage,
     }
@@ -216,6 +225,37 @@ def test_adapter_captures_cost_and_reasoning_detail() -> None:
         "prompt_audio_tokens",
     ):
         assert absent_key not in usage_out
+
+
+def test_adapter_counts_tool_calls_on_tool_only_turn() -> None:
+    """
+    A turn that returns only tool calls sets message.content to null,
+    which the adapter reports as "". Without a count the ledger row is
+    indistinguishable from a model that answered with nothing, so
+    completion_tool_call_count records what actually happened.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+    )
+    client = _client_returning(
+        _fake_response(
+            usage=usage,
+            text=None,
+            tool_calls=[
+                SimpleNamespace(id="call_1"),
+                SimpleNamespace(id="call_2"),
+            ],
+        ),
+    )
+    text, usage_out, _ = OpenAICompatAdapter().send(
+        client=client,
+        model="m",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == ""
+    assert usage_out["completion_tool_call_count"] == 2
 
 
 def test_adapter_omits_optional_usage_keys_when_absent() -> None:

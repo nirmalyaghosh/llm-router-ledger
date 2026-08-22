@@ -63,7 +63,13 @@ class AnthropicAdapter(ProviderAdapter):
         usage_dict carries only the three normalised token keys; the
         Messages API reports no cost, cache, or reasoning detail on an
         ordinary call the way OpenRouter does, so there is nothing else
-        to add.
+        to add. The one exception is completion_tool_call_count, the
+        number of tool_use blocks in the response, added so a tool-only
+        turn does not read as an empty response. It is unreachable
+        today: this library exposes no tools parameter and this adapter
+        ignores extra_body, so nothing can ask the Messages API for
+        tools. It is here so the ledger stays honest the moment tools
+        are plumbed through.
 
         generation_id is response.id (a `msg_*`-prefixed string); the
         downstream tracker routes it to provider_response_id since it
@@ -95,10 +101,13 @@ class AnthropicAdapter(ProviderAdapter):
         response = client.messages.create(**kwargs)
 
         text_blocks: list[str] = []
+        tool_call_count = 0
         for block in response.content or []:
             block_text = getattr(block, "text", None)
             if isinstance(block_text, str) and block_text:
                 text_blocks.append(block_text)
+            if getattr(block, "type", None) == "tool_use":
+                tool_call_count += 1
         text = "\n".join(text_blocks)
 
         raw = response.usage
@@ -117,5 +126,7 @@ class AnthropicAdapter(ProviderAdapter):
             "completion_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
         }
+        if tool_call_count:
+            usage["completion_tool_call_count"] = tool_call_count
 
         return text, usage, response.id or ""

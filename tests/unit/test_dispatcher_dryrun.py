@@ -604,6 +604,43 @@ def test_send_message_splits_usage_details(
     }
 
 
+def test_send_message_logs_tool_call_count_with_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    A tool-only turn logs response_length 0, since there is no text.
+    Previews are redacted by default, so completion_tool_call_count in
+    usage_details is the only thing telling a later reader that the row
+    is a tool call rather than a model that answered with nothing.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(
+        monkeypatch,
+        response_text="",
+        extra_usage={"completion_tool_call_count": 2},
+    )
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    send_message(
+        endpoint_name="ollama-local",
+        user="usr",
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    response = entries[1]
+    assert response["response_length"] == 0
+    assert response["usage_details"] == {
+        "completion_tool_call_count": 2,
+    }
+
+
 def test_send_message_unknown_endpoint_raises(
     sample_yaml_file: Path,
 ) -> None:

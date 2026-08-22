@@ -210,6 +210,29 @@ def test_adapter_translates_response_shape() -> None:
     assert gen_id == "msg_abc123"
 
 
+def test_adapter_counts_tool_use_blocks() -> None:
+    """
+    tool_use blocks are counted into completion_tool_call_count so a
+    turn that called tools does not read as an empty response. Text
+    blocks alongside them are still returned, and the count is by block
+    type rather than by absence of text.
+    """
+    client = _fake_client(
+        content=[
+            _text_block("calling a tool"),
+            _tool_use_block(),
+            _tool_use_block(),
+        ],
+    )
+    text, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "calling a tool"
+    assert usage["completion_tool_call_count"] == 2
+
+
 def test_adapter_joins_every_text_block() -> None:
     """
     A response carrying more than one text block returns all of them
@@ -233,17 +256,18 @@ def test_adapter_joins_every_text_block() -> None:
 def test_adapter_returns_empty_text_for_tool_only_turn() -> None:
     """
     A turn made up entirely of tool_use blocks has no text to report, so
-    the adapter returns "" rather than raising. Recording that turn as
-    something other than an empty response is a separate concern from
-    this extraction.
+    the adapter returns "" rather than raising. What keeps that row
+    honest in the ledger is completion_tool_call_count, asserted here
+    alongside the empty text.
     """
     client = _fake_client(content=[_tool_use_block()])
-    text, _, _ = AnthropicAdapter().send(
+    text, usage, _ = AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
         messages=[_text_message("user", "u")],
     )
     assert text == ""
+    assert usage["completion_tool_call_count"] == 1
 
 
 def test_adapter_skips_blocks_without_text() -> None:

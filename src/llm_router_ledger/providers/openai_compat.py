@@ -96,6 +96,12 @@ class OpenAICompatAdapter(ProviderAdapter):
         accepts for system, user, and assistant roles alike, so no
         per-role conversion is needed here.
 
+        response_text is "" on a turn that returns only tool calls,
+        since the API sets message.content to null there. That turn cost
+        real tokens, so usage_dict carries completion_tool_call_count to
+        keep the ledger row from reading as an empty response; the key
+        is omitted when the turn made no tool calls.
+
         usage_dict always has prompt_tokens, completion_tokens, and
         total_tokens, all zero if the provider omits usage. When the
         provider reports more, usage_dict also carries cost, is_byok,
@@ -134,9 +140,12 @@ class OpenAICompatAdapter(ProviderAdapter):
             )
         )
 
-        text = (
-            response.choices[0].message.content
-            or ""
+        message = response.choices[0].message
+        text = message.content or ""
+        tool_calls = getattr(
+            message,
+            "tool_calls",
+            None,
         )
         raw = response.usage
         usage: dict[str, Any] = {
@@ -165,6 +174,10 @@ class OpenAICompatAdapter(ProviderAdapter):
         )
         if is_byok is not None:
             usage["is_byok"] = is_byok
+        if tool_calls:
+            usage["completion_tool_call_count"] = len(
+                tool_calls
+            )
         completion_details = (
             getattr(
                 raw,
