@@ -54,6 +54,12 @@ class AnthropicAdapter(ProviderAdapter):
         {"role", "content": [{"type": "text", "text": ...}]} shape
         already matches Anthropic's TextBlockParam.
 
+        response_text is every text block in the response joined with a
+        newline, in order. A Messages API response is a list of content
+        blocks, and only a text block carries a text attribute: thinking
+        and tool_use blocks are skipped rather than read as empty. A
+        turn made up entirely of non-text blocks therefore returns "".
+
         usage_dict carries only the three normalised token keys; the
         Messages API reports no cost, cache, or reasoning detail on an
         ordinary call the way OpenRouter does, so there is nothing else
@@ -88,10 +94,12 @@ class AnthropicAdapter(ProviderAdapter):
 
         response = client.messages.create(**kwargs)
 
-        text = ""
-        if response.content:
-            first = response.content[0]
-            text = getattr(first, "text", "") or ""
+        text_blocks: list[str] = []
+        for block in response.content or []:
+            block_text = getattr(block, "text", None)
+            if isinstance(block_text, str) and block_text:
+                text_blocks.append(block_text)
+        text = "\n".join(text_blocks)
 
         raw = response.usage
         input_tokens = (

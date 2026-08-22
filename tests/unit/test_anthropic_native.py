@@ -14,22 +14,50 @@ from unittest.mock import MagicMock
 from llm_router_ledger.providers.anthropic_native import AnthropicAdapter
 
 
+def _text_block(text: str) -> MagicMock:
+    """
+    Helper function used to build one Anthropic TextBlock, the only
+    block type that carries a text attribute.
+    """
+    block = MagicMock(spec=["type", "text"])
+    block.type = "text"
+    block.text = text
+    return block
+
+
+def _tool_use_block() -> MagicMock:
+    """
+    Helper function used to build one Anthropic ToolUseBlock. spec omits
+    text deliberately: a tool_use block has no text attribute at all,
+    which is what the adapter has to survive.
+    """
+    block = MagicMock(spec=["type", "id", "name", "input"])
+    block.type = "tool_use"
+    block.name = "get_weather"
+    block.input = {"city": "Singapore"}
+    return block
+
+
 def _fake_client(
     response_id: str = "msg_abc",
     response_text: str = "ok",
     input_tokens: int = 10,
     output_tokens: int = 5,
+    content: list[MagicMock] | None = None,
 ) -> MagicMock:
     """
     Helper function used to build a MagicMock Anthropic SDK client whose
     messages.create returns a minimal response with content blocks,
-    usage, and id set in Anthropic's shape.
+    usage, and id set in Anthropic's shape. Pass content to control the
+    block list; the default is a single text block holding response_text.
     """
     client = MagicMock()
     response = MagicMock()
-    content_block = MagicMock()
-    content_block.text = response_text
-    response.content = [content_block]
+    response.content = (
+        content
+        if content is not None
+        else [_text_block(response_text)]
+    )
     response.id = response_id
     usage = MagicMock()
     usage.input_tokens = input_tokens
@@ -180,3 +208,60 @@ def test_adapter_translates_response_shape() -> None:
         "total_tokens": 15,
     }
     assert gen_id == "msg_abc123"
+
+
+def test_adapter_joins_every_text_block() -> None:
+    """
+    A response carrying more than one text block returns all of them
+    joined, not just the first. Reading content[0] alone silently
+    truncated the response to its opening block.
+    """
+    client = _fake_client(
+        content=[
+            _text_block("first half"),
+            _text_block("second half"),
+        ],
+    )
+    text, _, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "first half\nsecond half"
+
+
+def test_adapter_returns_empty_text_for_tool_only_turn() -> None:
+    """
+    A turn made up entirely of tool_use blocks has no text to report, so
+    the adapter returns "" rather than raising. Recording that turn as
+    something other than an empty response is a separate concern from
+    this extraction.
+    """
+    client = _fake_client(content=[_tool_use_block()])
+    text, _, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == ""
+
+
+def test_adapter_skips_blocks_without_text() -> None:
+    """
+    A block that carries no text attribute (tool_use here, thinking
+    likewise) contributes nothing and does not mask the text blocks
+    around it. Reading content[0] alone lost the whole response
+    whenever a non-text block happened to come first.
+    """
+    client = _fake_client(
+        content=[
+            _tool_use_block(),
+            _text_block("the actual answer"),
+        ],
+    )
+    text, _, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "the actual answer"
