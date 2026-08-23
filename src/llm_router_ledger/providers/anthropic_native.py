@@ -25,6 +25,11 @@ from llm_router_ledger._messages import extract_system_text
 from llm_router_ledger.providers._base import ProviderAdapter
 
 
+# The Messages API name for an ordinary completion, its spelling of the
+# OpenAI-compatible "stop". Other values are recorded as finish_reason.
+ORDINARY_STOP_REASON = "end_turn"
+
+
 class AnthropicAdapter(ProviderAdapter):
     """
     Adapter for Anthropic's native Messages API (api.anthropic.com).
@@ -70,6 +75,11 @@ class AnthropicAdapter(ProviderAdapter):
         ignores extra_body, so nothing can ask the Messages API for
         tools. It is here so the ledger stays honest the moment tools
         are plumbed through.
+
+        stop_reason is recorded as finish_reason, the key the
+        OpenAI-compatible adapter uses, unless it is "end_turn". The
+        value stays in Anthropic's vocabulary: the two APIs' stop
+        reasons do not map onto each other cleanly enough to normalise.
 
         generation_id is response.id (a `msg_*`-prefixed string); the
         downstream tracker routes it to provider_response_id since it
@@ -121,12 +131,15 @@ class AnthropicAdapter(ProviderAdapter):
             if raw is not None
             else 0
         )
-        usage: dict[str, int] = {
+        usage: dict[str, Any] = {
             "prompt_tokens": input_tokens,
             "completion_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
         }
         if tool_call_count:
             usage["completion_tool_call_count"] = tool_call_count
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason and stop_reason != ORDINARY_STOP_REASON:
+            usage["finish_reason"] = stop_reason
 
         return text, usage, response.id or ""

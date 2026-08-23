@@ -44,12 +44,17 @@ def _fake_client(
     input_tokens: int = 10,
     output_tokens: int = 5,
     content: list[MagicMock] | None = None,
+    stop_reason: str = "end_turn",
 ) -> MagicMock:
     """
     Helper function used to build a MagicMock Anthropic SDK client whose
     messages.create returns a minimal response with content blocks,
     usage, and id set in Anthropic's shape. Pass content to control the
     block list; the default is a single text block holding response_text.
+
+    stop_reason defaults to the ordinary "end_turn", and is set rather
+    than left to MagicMock, which would auto-vivify it as a truthy mock
+    and write a bogus finish_reason into every usage dict.
     """
     client = MagicMock()
     response = MagicMock()
@@ -59,6 +64,7 @@ def _fake_client(
         else [_text_block(response_text)]
     )
     response.id = response_id
+    response.stop_reason = stop_reason
     usage = MagicMock()
     usage.input_tokens = input_tokens
     usage.output_tokens = output_tokens
@@ -251,6 +257,21 @@ def test_adapter_joins_every_text_block() -> None:
         messages=[_text_message("user", "u")],
     )
     assert text == "first half\nsecond half"
+
+
+def test_adapter_records_non_ordinary_stop_reason() -> None:
+    """
+    A stop_reason other than "end_turn" reaches usage as finish_reason,
+    the key the OpenAI-compatible adapter uses. max_tokens means the
+    answer was cut off, which the token counts alone do not show.
+    """
+    client = _fake_client(stop_reason="max_tokens")
+    _, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage["finish_reason"] == "max_tokens"
 
 
 def test_adapter_returns_empty_text_for_tool_only_turn() -> None:

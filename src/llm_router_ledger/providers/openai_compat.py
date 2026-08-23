@@ -26,6 +26,11 @@ from llm_router_ledger.providers._base import (
 
 ENCODING_FORMAT = "float"
 
+# The finish_reason of a turn that ran to completion. Other values
+# (length, tool_calls, content_filter) mean the response is not the
+# whole answer, and are recorded as finish_reason.
+ORDINARY_FINISH_REASON = "stop"
+
 # completion_tokens_details and prompt_tokens_details field names, per
 # OpenRouter's chat completion response. audio_tokens appears in both
 # blocks with a different meaning in each, which is why every key is
@@ -102,6 +107,10 @@ class OpenAICompatAdapter(ProviderAdapter):
         keep the ledger row from reading as an empty response; the key
         is omitted when the turn made no tool calls.
 
+        usage_dict also carries finish_reason, in the provider's own
+        vocabulary, when the turn ended as anything other than "stop",
+        e.g. "length" for an answer truncated at max_tokens.
+
         usage_dict always has prompt_tokens, completion_tokens, and
         total_tokens, all zero if the provider omits usage. When the
         provider reports more, usage_dict also carries cost, is_byok,
@@ -140,11 +149,17 @@ class OpenAICompatAdapter(ProviderAdapter):
             )
         )
 
-        message = response.choices[0].message
+        choice = response.choices[0]
+        message = choice.message
         text = message.content or ""
         tool_calls = getattr(
             message,
             "tool_calls",
+            None,
+        )
+        finish_reason = getattr(
+            choice,
+            "finish_reason",
             None,
         )
         raw = response.usage
@@ -178,6 +193,8 @@ class OpenAICompatAdapter(ProviderAdapter):
             usage["completion_tool_call_count"] = len(
                 tool_calls
             )
+        if finish_reason and finish_reason != ORDINARY_FINISH_REASON:
+            usage["finish_reason"] = finish_reason
         completion_details = (
             getattr(
                 raw,

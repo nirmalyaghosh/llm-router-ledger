@@ -36,6 +36,7 @@ def _fake_client(
     response = MagicMock()
     response.choices = [MagicMock()]
     response.choices[0].message.content = response_text
+    response.choices[0].finish_reason = "stop"
     response.id = response_id
     usage = MagicMock()
     usage.prompt_tokens = 1
@@ -53,6 +54,7 @@ def _fake_response(
     response_id: str = "gen-abc",
     provider: str | None = None,
     tool_calls: list[SimpleNamespace] | None = None,
+    finish_reason: str | None = None,
 ) -> SimpleNamespace:
     """
     Helper function used to build a plain response object for the usage-
@@ -65,13 +67,18 @@ def _fake_response(
     text is None and tool_calls is a list on a tool-call turn, matching
     what the API returns there. The message carries no tool_calls
     attribute at all unless one is passed, since an ordinary provider
-    response omits it entirely.
+    response omits it entirely. The choice likewise carries no
+    finish_reason unless passed, as some OpenAI-compatible servers
+    omit it.
     """
     message = SimpleNamespace(content=text)
     if tool_calls is not None:
         message.tool_calls = tool_calls
+    choice = SimpleNamespace(message=message)
+    if finish_reason is not None:
+        choice.finish_reason = finish_reason
     kwargs: dict[str, object] = {
-        "choices": [SimpleNamespace(message=message)],
+        "choices": [choice],
         "id": response_id,
         "usage": usage,
     }
@@ -258,6 +265,26 @@ def test_adapter_counts_tool_calls_on_tool_only_turn() -> None:
     assert usage_out["completion_tool_call_count"] == 2
 
 
+def test_adapter_omits_ordinary_finish_reason() -> None:
+    """
+    finish_reason "stop" is dropped rather than written on every row.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=1,
+        completion_tokens=2,
+        total_tokens=3,
+    )
+    client = _client_returning(
+        _fake_response(usage=usage, finish_reason="stop"),
+    )
+    _, usage_out, _ = OpenAICompatAdapter().send(
+        client=client,
+        model="m",
+        messages=[_text_message("user", "u")],
+    )
+    assert "finish_reason" not in usage_out
+
+
 def test_adapter_omits_optional_usage_keys_when_absent() -> None:
     """
     A provider that reports only the three base token counts (no cost,
@@ -280,6 +307,28 @@ def test_adapter_omits_optional_usage_keys_when_absent() -> None:
         "completion_tokens": 2,
         "total_tokens": 3,
     }
+
+
+def test_adapter_records_truncated_finish_reason() -> None:
+    """
+    finish_reason "length" means the model was cut off at max_tokens.
+    The token counts look like any other full turn, so without this key
+    the ledger cannot tell a truncated response from a complete one.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=100,
+        completion_tokens=4096,
+        total_tokens=4196,
+    )
+    client = _client_returning(
+        _fake_response(usage=usage, finish_reason="length"),
+    )
+    _, usage_out, _ = OpenAICompatAdapter().send(
+        client=client,
+        model="m",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage_out["finish_reason"] == "length"
 
 
 def test_adapter_handles_missing_usage() -> None:
