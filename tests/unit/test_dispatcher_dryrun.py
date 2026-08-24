@@ -327,6 +327,14 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
             "https://api.deepseek.com/v1",
             "chatcmpl-test",
         ),
+        # LM Studio serves the OpenAI chat API locally on port 1234.
+        (
+            "lmstudio",
+            "qwen3-4b",
+            "LMSTUDIO_API_KEY",
+            "http://localhost:1234/v1",
+            "chatcmpl-test",
+        ),
         # MiniMax text API is OpenAI-compatible.
         (
             "minimax",
@@ -368,7 +376,16 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
             "chatcmpl-test",
         ),
     ],
-    ids=["azure", "deepseek", "minimax", "ollama", "openai", "qwen", "zhipu"],
+    ids=[
+        "azure",
+        "deepseek",
+        "lmstudio",
+        "minimax",
+        "ollama",
+        "openai",
+        "qwen",
+        "zhipu",
+    ],
 )
 def test_send_message_dispatches_to_openai_compat(
     monkeypatch: pytest.MonkeyPatch,

@@ -5,8 +5,8 @@ get_client(endpoint_name) returns the SDK client object for a given
 endpoint:
 
 - anthropic -> anthropic.Anthropic
-- all others (azure, bytedance, deepseek, gemini, local-openai-compat,
-  minimax, ollama, openai, openrouter, qwen, xiaomi, zhipu) ->
+- all others (azure, bytedance, deepseek, gemini, lmstudio, minimax,
+  ollama, openai, openrouter, qwen, xiaomi, zhipu) ->
   openai.OpenAI with the endpoint's base_url. Azure's modern v1
   endpoint (base_url ending in /openai/v1/) is fully OpenAI-compatible,
   so it uses the standard OpenAI client just like every other

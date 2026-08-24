@@ -389,14 +389,14 @@ def test_load_config_returns_typed_objects(
     assert ep.context_window == 8192
 
 
-def test_local_openai_compat_emits_deprecation_warning(
+def test_local_openai_compat_is_rejected_with_migration_hint(
     tmp_path: Path,
 ) -> None:
     """
-    Loading a YAML with provider: local-openai-compat emits a
-    DeprecationWarning pointing at the specific replacement options
-    (e.g. ollama). The endpoint still loads successfully so existing
-    configs keep working until 0.2.0 removes the alias.
+    provider: local-openai-compat was deprecated in 0.1.2 and removed
+    in 0.2.0, so load_config now rejects it. The error identifies the
+    endpoint and the replacement provider names rather than relying on
+    Pydantic's enumeration of every valid value.
     """
     yaml_text = (
         "endpoints:\n"
@@ -408,12 +408,9 @@ def test_local_openai_compat_emits_deprecation_warning(
     )
     p = tmp_path / "with_legacy.yaml"
     p.write_text(yaml_text, encoding="utf-8")
-    with pytest.warns(
-        DeprecationWarning,
-        match="local-openai-compat",
-    ):
-        config = load_config(p)
-    assert (
-        config.endpoints["legacy-local"].provider
-        == "local-openai-compat"
-    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(p)
+    message = str(excinfo.value)
+    assert "legacy-local" in message
+    assert "ollama" in message
+    assert "lmstudio" in message

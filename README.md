@@ -9,14 +9,14 @@ request and response for offline cost reconciliation.
 | Status | Adapter | Providers |
 |---|---|---|
 | Supported | direct | Anthropic |
-| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local Ollama, MiniMax, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
+| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
 | Supported | via OpenRouter | ByteDance Seed, Xiaomi MiMo |
 | Planned | direct | Gemini |
 
 - All "Supported" rows in 0.1.2 are live-smoke-verified end-to-end.
 - Anthropic requires the optional `[anthropic]` extra: `uv pip install llm-router-ledger[anthropic]`.
 - For ByteDance Seed and Xiaomi MiMo, use `provider: openrouter` with the appropriate model id.
-- The table above is about text. Embeddings are gated separately and verified on OpenRouter and Ollama only; see [Embeddings](#embeddings).
+- The table above is about text. Embeddings are gated separately and verified on OpenRouter, Ollama and LM Studio only; see [Embeddings](#embeddings).
 
 ## Install
 
@@ -113,7 +113,7 @@ Via OpenRouter:
 | `qwen/qwen3-embedding-4b` | 2560 | 32768 |
 | `qwen/qwen3-embedding-8b` | 4096 | 32768 |
 
-Locally via Ollama: `qwen3-embedding:0.6b`, 1024 dims, 32768 context (`ollama pull qwen3-embedding:0.6b`).
+Locally via Ollama: `qwen3-embedding:0.6b`, 1024 dims, 32768 context (`ollama pull qwen3-embedding:0.6b`). The same model at Q8_0 runs under LM Studio as `text-embedding-qwen3-embedding-0.6b`, downloaded from the Discover tab, so local runs on either server are directly comparable.
 
 `baai/bge-base-en-v1.5` is English only. Non-English input still returns vectors, with no error.
 
@@ -132,7 +132,9 @@ An optional endpoint field declaring the vector width.
 
 Embeddings are refused for providers not verified end-to-end, even where the chat adapter works: `provider: openai` raises `NotImplementedError`.
 
-`ollama` is verified. `local-openai-compat` is not, so vLLM and LM Studio are refused despite serving the same OpenAI-compatible API.
+`ollama` and `lmstudio` are verified for embeddings. Other local servers are not, so they are refused despite serving the same OpenAI-compatible API.
+
+Neither local server returns a response id, leaving `provider_response_id` empty. LM Studio additionally reports `prompt_tokens` and `total_tokens` as zero for embeddings, at any input size, so its rows record the vectors and their width but a token count of 0 rather than the true figure. Ollama reports real counts. Nothing is billed on either, so there is no invoice to reconcile against.
 
 ### Smoke tests
 
@@ -140,9 +142,10 @@ Embeddings are refused for providers not verified end-to-end, even where the cha
 python examples/smoke_test_openrouter_embeddings.py                                       # free endpoint
 python examples/smoke_test_openrouter_embeddings.py --endpoint openrouter-embed-qwen3-8b
 python examples/smoke_test_ollama_embeddings.py                                           # local, no cost
+python examples/smoke_test_lmstudio_embeddings.py                                         # local, no cost
 ```
 
-Both take `--input-file`, one text to embed per line, in place of the sample corpus.
+Each takes `--input-file`, one text to embed per line, in place of the sample corpus.
 
 ## Per-endpoint request params
 

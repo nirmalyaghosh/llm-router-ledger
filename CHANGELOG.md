@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added: `usage_details` on chat responses, holding `cost`, `is_byok`, `upstream_provider`, flattened `completion_*` / `prompt_*` token details, `completion_tool_call_count`, and `finish_reason`; `CostConfig.cache_write_input_per_1m`; `send_message(messages=...)` for multi-turn calls.
+- Added: `usage_details` on chat responses, holding `cost`, `is_byok`, `upstream_provider`, flattened `completion_*` / `prompt_*` token details, `completion_tool_call_count`, and `finish_reason`; `CostConfig.cache_write_input_per_1m`; `send_message(messages=...)` for multi-turn calls; `provider: lmstudio`, verified end-to-end against a local LM Studio server for both chat and embeddings. LM Studio reports `prompt_tokens` and `total_tokens` as zero on embeddings, so those rows record a token count of 0.
 - Changed: `send_message()` / `create_embeddings()` return `ChatResult` / `EmbeddingResult` namedtuples; use `.text` / `.vectors`, `.usage`, `.generation_id`. `CostConfig.estimate_cost()` takes `cached_tokens` / `cache_write_tokens` counts instead of a `cache_hit` bool, and honours an explicit `0.0` rate as free. `UsageTracker` previews are redacted by default; pass `preview_length` to opt back in. `ProviderAdapter.send()` takes `messages` instead of `system` / `user`, breaking custom adapters.
+- Removed: `provider: local-openai-compat`, deprecated since 0.1.2; `load_config()` raises `ConfigError` naming `ollama` / `lmstudio` as replacements.
 - Deprecated: positional unpacking of the result tuple (logs a warning on each use); removed in 0.3.0 when new fields land on either result type.
 
 ## [0.1.4] - 2026-08-01

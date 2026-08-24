@@ -370,3 +370,23 @@ def test_select_embedding_adapter_accepts_ollama() -> None:
         adapter,
         OpenAICompatEmbeddingAdapter,
     )
+
+
+def test_select_embedding_adapter_accepts_lmstudio() -> None:
+    """
+    LM Studio resolves to the same shared adapter as Ollama. It was
+    verified end-to-end against Qwen3-Embedding-0.6B at Q8_0, the same
+    model and quantisation Ollama serves, returning identical 1024-wide
+    vectors.
+
+    It reports prompt_tokens and total_tokens as zero for embeddings at
+    any input size, so its rows record a token count of 0 rather than
+    the true figure. That is a reporting gap in the server, not a
+    parsing difference: the response is otherwise well formed and needs
+    no adapter of its own.
+    """
+    adapter = _select_embedding_adapter("lmstudio")
+    assert isinstance(
+        adapter,
+        OpenAICompatEmbeddingAdapter,
+    )

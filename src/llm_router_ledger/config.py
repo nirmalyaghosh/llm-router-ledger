@@ -19,7 +19,6 @@ setup.
 from __future__ import annotations
 
 import os
-import warnings
 
 from datetime import date
 from pathlib import Path
@@ -50,7 +49,7 @@ ProviderName = Literal[
     "bytedance",
     "deepseek",
     "gemini",
-    "local-openai-compat",
+    "lmstudio",
     "minimax",
     "ollama",
     "openai",
@@ -358,14 +357,14 @@ def load_config(path: str | Path | None = None) -> LLMConfig:
             **ep_data,
         }
         if merged.get("provider") == "local-openai-compat":
-            warnings.warn(
+            raise ConfigError(
                 f"Endpoint '{name}': provider"
-                " 'local-openai-compat' is deprecated and"
-                " will be removed in 0.2.0. Use a specific"
-                " local-server provider name instead"
-                " (e.g. 'ollama').",
-                DeprecationWarning,
-                stacklevel=2,
+                " 'local-openai-compat' was removed in 0.2.0,"
+                " having been deprecated in 0.1.2. Specify the"
+                " local server explicitly: 'ollama' or"
+                " 'lmstudio'. The ledger records the configured"
+                " provider name, so the two are not"
+                " interchangeable."
             )
         endpoints[name] = EndpointConfig(
             **merged,

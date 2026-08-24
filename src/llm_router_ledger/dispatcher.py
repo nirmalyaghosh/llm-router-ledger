@@ -55,6 +55,7 @@ _TOKEN_USAGE_KEYS = frozenset({
 })
 
 _VERIFIED_EMBEDDING_PROVIDERS = frozenset({
+    "lmstudio",
     "ollama",
     "openrouter",
 })
@@ -63,7 +64,7 @@ _VERIFIED_PROVIDERS = frozenset({
     "anthropic",
     "azure",
     "deepseek",
-    "local-openai-compat",
+    "lmstudio",
     "minimax",
     "ollama",
     "openai",
@@ -178,10 +179,12 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     serve no embedding models at all, and the rest were not exercised
     end-to-end in this release.
 
-    Note that "local-openai-compat" is deliberately absent even though
-    "ollama" is present. Ollama's embeddings endpoint was verified
-    directly; LM Studio, llama.cpp and vLLM share that provider name
-    and were not.
+    Both local-server names are verified. Neither returns a response
+    id, so their rows carry an empty provider_response_id. LM Studio
+    additionally leaves prompt_tokens and total_tokens at zero for
+    embeddings, so those rows record the vectors and their width but
+    no token count. Nothing is billed either way, so there is no
+    invoice to reconcile against.
     """
     if provider not in _VERIFIED_EMBEDDING_PROVIDERS:
         verified = ", ".join(
@@ -191,8 +194,8 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
             f"Embeddings are not available for the '{provider}'"
             f" provider. Verified embedding providers in this"
             f" release: {verified}. Point the endpoint at OpenRouter"
-            f" for hosted embedding models, or at Ollama to run one"
-            f" locally."
+            f" for hosted embedding models, or at Ollama or LM Studio"
+            f" to run one locally."
         )
     return OpenAICompatEmbeddingAdapter()
 

@@ -32,6 +32,26 @@ endpoints:
       pricing_url: https://api-docs.deepseek.com/quick_start/pricing
       pricing_checked: 2026-05-01
 
+  # Local LM Studio. No real API key needed; any non-empty string works
+  # for LMSTUDIO_API_KEY. Start the server from the Developer tab or with
+  # `lms server start --port 1234`; loading a model alone does not start it.
+  # The model id is the one GET /v1/models reports, not the display name
+  # in the UI. qwen3-4b is what examples/smoke_test_lmstudio.py was
+  # verified against.
+  #
+  # timeout_seconds is well above the 60 second default because a local
+  # reasoning model is slow: the verification run spent 1413 of its 1464
+  # completion tokens on reasoning and took over eight minutes on CPU.
+  # The default times out mid-call, which logs a request with no matching
+  # response. Lower it for a non-reasoning model.
+  local-lmstudio:
+    provider: lmstudio
+    model: qwen3-4b
+    api_key_env: LMSTUDIO_API_KEY
+    base_url: http://localhost:1234/v1
+    context_window: 32768
+    timeout_seconds: 900
+
   # Local Ollama. No real API key needed; any non-empty string works for OLLAMA_API_KEY.
   # The model below (qwen2.5vl:3b) is what examples/smoke_test_ollama.py was verified against.
   # Substitute whatever you have pulled via `ollama pull <model>`.
@@ -50,6 +70,28 @@ endpoints:
     api_key_env: MINIMAX_API_KEY
     base_url: https://api.minimax.io/v1
     context_window: 204800
+
+  # Local LM Studio embeddings, called with create_embeddings() rather
+  # than send_message(). Download the model in the Discover tab; the
+  # id below is what GET /v1/models reports, not the display name.
+  # Qwen3-Embedding-0.6B at Q8_0 is the same model and quantisation
+  # Ollama serves below, so the two are directly comparable.
+  #
+  # LM Studio reports prompt_tokens and total_tokens as zero for
+  # embeddings, so rows for this endpoint carry a token count of 0
+  # rather than the true figure. It returns no response id either, so
+  # provider_response_id is empty, as with Ollama. Nothing is billed,
+  # so there is no invoice to reconcile against.
+  lmstudio-embed-qwen3-0.6b:
+    provider: lmstudio
+    model: text-embedding-qwen3-embedding-0.6b
+    api_key_env: LMSTUDIO_API_KEY
+    base_url: http://localhost:1234/v1
+    context_window: 32768
+    embedding_dimensions: 1024
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
 
   # Local Ollama embeddings, called with create_embeddings() rather
   # than send_message(). Pull the model first:
