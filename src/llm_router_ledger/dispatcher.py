@@ -19,6 +19,7 @@ from llm_router_ledger._messages import (
     extract_system_text,
     extract_text,
 )
+from llm_router_ledger._usage import split_usage
 from llm_router_ledger.client_factory import (
     get_client,
     get_model_name,
@@ -48,12 +49,6 @@ from llm_router_ledger.results import (
 )
 from llm_router_ledger.usage_tracker import UsageTracker
 
-
-_TOKEN_USAGE_KEYS = frozenset({
-    "completion_tokens",
-    "prompt_tokens",
-    "total_tokens",
-})
 
 _VERIFIED_EMBEDDING_PROVIDERS = frozenset({
     "lmstudio",
@@ -201,36 +196,6 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     return OpenAICompatEmbeddingAdapter()
 
 
-def _split_usage(
-    usage: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """
-    Helper function used to divide an adapter's usage dict into the
-    three normalised token keys the ledger's usage block holds and the
-    remainder, which belongs in usage_details (e.g. dimensions and
-    embedding_count for create_embeddings; cost, is_byok, and the
-    flattened cache/reasoning detail keys for send_message).
-
-    The split is by token key rather than by a list of known extras, so a
-    value a provider starts returning later lands in usage_details on its
-    own instead of being silently dropped. The adapters uphold the same
-    rule upstream: a usage key they have no mapping for is collected
-    under usage_details["unmapped"] rather than discarded.
-    Modality-agnostic: the same function serves both entry points.
-    """
-    tokens = {
-        key: value
-        for key, value in usage.items()
-        if key in _TOKEN_USAGE_KEYS
-    }
-    details = {
-        key: value
-        for key, value in usage.items()
-        if key not in _TOKEN_USAGE_KEYS
-    }
-    return tokens, details
-
-
 def create_embeddings(
     *,
     endpoint_name: str,
@@ -332,7 +297,7 @@ def create_embeddings(
 
     if tracker is not None:
         token_usage, usage_details = (
-            _split_usage(usage)
+            split_usage(usage)
         )
         # response_text is empty because an embedding response carries no
         # text: recording a stand-in would put a fabricated
@@ -498,7 +463,7 @@ def send_message(
 
     if tracker is not None:
         token_usage, usage_details = (
-            _split_usage(usage)
+            split_usage(usage)
         )
         tracker.log_response(
             request_id=request_id,
