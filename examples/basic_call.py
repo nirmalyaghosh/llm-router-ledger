@@ -30,16 +30,16 @@ def main() -> None:
         log_path="logs/usage.jsonl",
         project_id="ollama-quickstart",
     )
-    text, usage, gen_id = send_message(
+    result = send_message(
         endpoint_name="local-llama",
         system="You are concise.",
         user="Explain prompt caching in two sentences.",
         tracker=tracker,
     )
-    print(text)
+    print(result.text)
     print()
-    print(f"tokens used: {usage['total_tokens']}")
-    print(f"response id: {gen_id}")
+    print(f"tokens used: {result.usage['total_tokens']}")
+    print(f"response id: {result.generation_id}")
     tracker.close()
 
 

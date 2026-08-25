@@ -19,7 +19,6 @@ setup.
 from __future__ import annotations
 
 import os
-import warnings
 
 from datetime import date
 from pathlib import Path
@@ -36,10 +35,13 @@ from pydantic import (
     Field,
 )
 
+from llm_router_ledger._logger import get_logger
 from llm_router_ledger.exceptions import (
     ConfigError,
     MissingApiKeyError,
 )
+
+logger = get_logger(__name__)
 
 load_dotenv()
 
@@ -50,7 +52,7 @@ ProviderName = Literal[
     "bytedance",
     "deepseek",
     "gemini",
-    "local-openai-compat",
+    "lmstudio",
     "minimax",
     "ollama",
     "openai",
@@ -72,6 +74,7 @@ class CostConfig(BaseModel):
     input_per_1m: float
     output_per_1m: float
     cache_hit_input_per_1m: float | None = None
+    cache_write_input_per_1m: float | None = None
     pricing_url: str | None = None
     pricing_checked: date | None = None
     pricing_notes: str | None = None
@@ -91,22 +94,51 @@ class CostConfig(BaseModel):
         self,
         input_tokens: int,
         output_tokens: int,
-        cache_hit: bool = False,
+        *,
+        cached_tokens: int = 0,
+        cache_write_tokens: int = 0,
     ) -> float:
         """
         Estimate cost in USD for a single request.
+
+        input_tokens is the full prompt token count, matching how a
+        provider reports it; cached_tokens and cache_write_tokens are
+        the subsets of it billed at cache_hit_input_per_1m and
+        cache_write_input_per_1m respectively, since a real call can mix
+        cached, cache-write, and uncached input in one prompt rather
+        than being purely one or the other. Whichever rate is unset
+        falls back to input_per_1m, including when it is explicitly 0.0
+        (a genuinely free tier, not "unset").
+
+        Raises ValueError if cached_tokens plus cache_write_tokens
+        exceeds input_tokens, which would otherwise silently produce a
+        negative charge for the remaining uncached tokens.
         """
-        if (
-            cache_hit
-            and self.cache_hit_input_per_1m
-        ):
-            input_rate = (
-                self.cache_hit_input_per_1m
+        if cached_tokens + cache_write_tokens > input_tokens:
+            raise ValueError(
+                f"cached_tokens ({cached_tokens}) plus"
+                f" cache_write_tokens ({cache_write_tokens})"
+                f" exceeds input_tokens ({input_tokens})"
             )
-        else:
-            input_rate = self.input_per_1m
+        uncached_tokens = (
+            input_tokens
+            - cached_tokens
+            - cache_write_tokens
+        )
+        cache_hit_rate = (
+            self.cache_hit_input_per_1m
+            if self.cache_hit_input_per_1m is not None
+            else self.input_per_1m
+        )
+        cache_write_rate = (
+            self.cache_write_input_per_1m
+            if self.cache_write_input_per_1m is not None
+            else self.input_per_1m
+        )
         return (
-            input_tokens * input_rate
+            uncached_tokens * self.input_per_1m
+            + cached_tokens * cache_hit_rate
+            + cache_write_tokens * cache_write_rate
             + output_tokens * self.output_per_1m
         ) / 1_000_000
 
@@ -231,7 +263,16 @@ class LLMConfig(BaseModel):
         """
         Resolve role assignment to endpoint configs. Returns list (role
         may map to a list or a single string in YAML).
+
+        Deprecated: removed in 0.3.0, replaced by route groups.
         """
+        logger.warning(
+            "get_role_endpoints() and the `roles` config block are"
+            " deprecated and will be removed in 0.3.0, when route"
+            " groups replace them. Route groups carry a selection"
+            " strategy and stamp the chosen endpoint in the ledger.",
+            stacklevel=2,
+        )
         mapping = self.roles.get(
             project,
             self.roles.get("default", {}),
@@ -261,23 +302,25 @@ def get_context_window(
     """
     Look up context window for a model string.
 
-    Strips a single leading provider prefix so e.g.
-    "openrouter:qwen/qwen3.5-9b" matches an endpoint whose model field is
-    "qwen/qwen3.5-9b". Returns default if no match is found.
+    The string is matched as given first, so an OpenRouter ":free"
+    variant such as "nvidia/nemotron-3.5-lightning:free" resolves to its
+    own endpoint. Only when that misses is a single leading provider
+    prefix stripped, so "openrouter:qwen/qwen3.5-9b" still matches an
+    endpoint whose model field is "qwen/qwen3.5-9b". Returns default if
+    no match is found.
     """
     if config is None:
         config = load_config()
-    bare = (
-        model.split(":", 1)[-1]
-        if ":" in model
-        else model
-    )
-    for ep in config.endpoints.values():
-        if (
-            ep.model == bare
-            and ep.context_window
-        ):
-            return ep.context_window
+    candidates = [model]
+    if ":" in model:
+        candidates.append(model.split(":", 1)[-1])
+    for candidate in candidates:
+        for ep in config.endpoints.values():
+            if (
+                ep.model == candidate
+                and ep.context_window
+            ):
+                return ep.context_window
     return default
 
 
@@ -328,14 +371,14 @@ def load_config(path: str | Path | None = None) -> LLMConfig:
             **ep_data,
         }
         if merged.get("provider") == "local-openai-compat":
-            warnings.warn(
+            raise ConfigError(
                 f"Endpoint '{name}': provider"
-                " 'local-openai-compat' is deprecated and"
-                " will be removed in 0.2.0. Use a specific"
-                " local-server provider name instead"
-                " (e.g. 'ollama').",
-                DeprecationWarning,
-                stacklevel=2,
+                " 'local-openai-compat' was removed in 0.2.0,"
+                " having been deprecated in 0.1.2. Specify the"
+                " local server explicitly: 'ollama' or"
+                " 'lmstudio'. The ledger records the configured"
+                " provider name, so the two are not"
+                " interchangeable."
             )
         endpoints[name] = EndpointConfig(
             **merged,

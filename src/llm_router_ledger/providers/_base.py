@@ -16,6 +16,61 @@ from abc import (
 from typing import Any
 
 
+def as_usage_dict(obj: Any) -> dict[str, Any]:
+    """
+    Best-effort dict view of an SDK usage object, which may be a
+    pydantic model or a plain dict depending on the provider's SDK.
+    """
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return dict(obj)
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        try:
+            return dict(dump())
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        key: value
+        for key, value in vars(obj).items()
+        if not key.startswith("_")
+    }
+
+
+def collect_unmapped(
+    raw: Any,
+    mapped: tuple[str, ...],
+    blocks: tuple[tuple[str, tuple[str, ...], str], ...] = (),
+) -> dict[str, Any]:
+    """
+    Gather the usage keys an adapter has no mapping for, so a
+    provider-specific field reaches the ledger under
+    usage_details["unmapped"] rather than being dropped.
+
+    mapped names the top-level keys the adapter handles itself. blocks
+    names each nested detail block as (block name, keys the adapter
+    maps, prefix), so an unmapped key inside one takes the same prefix
+    its mapped siblings take. Falsy values are omitted throughout,
+    matching how the adapters write cost and the detail keys only when
+    the provider actually reports them.
+
+    Keys collected here are unstable by design: one that later gains an
+    explicit mapping moves out of "unmapped" and up a level.
+    """
+    usage = as_usage_dict(raw)
+    unmapped: dict[str, Any] = {}
+    for key, value in usage.items():
+        if key not in mapped and value:
+            unmapped[key] = value
+    for block, known, prefix in blocks:
+        block_items = as_usage_dict(usage.get(block)).items()
+        for key, value in block_items:
+            if key not in known and value:
+                unmapped[f"{prefix}{key}"] = value
+    return unmapped
+
+
 class EmbeddingAdapter(ABC):
     """
     Uniform embed interface for a single provider family.
@@ -69,29 +124,40 @@ class ProviderAdapter(ABC):
         *,
         client: Any,
         model: str,
-        system: str | None,
-        user: str,
+        messages: list[dict[str, Any]],
         max_tokens: int = 4096,
         temperature: float | None = None,
         timeout_seconds: float | None = None,
         user_id: str | None = None,
         extra_body: dict[str, Any] | None = None,
         response_format: dict[str, Any] | None = None,
-    ) -> tuple[str, dict[str, int], str]:
+    ) -> tuple[str, dict[str, Any], str]:
         """
-        Send system + user to the provider and return (response_text,
+        Send messages to the provider and return (response_text,
         usage_dict, generation_id).
 
-        usage_dict is normalised to keys prompt_tokens, completion_tokens,
-        total_tokens. generation_id is the provider's response identifier,
-        or "" if the provider does not return one. When timeout_seconds
-        is None the client-level default applies.
+        messages is already normalised by the dispatcher into the
+        OpenAI content-parts shape: each entry is
+        {"role": "system" | "user" | "assistant", "content":
+        [{"type": "text", "text": ...}]}. A "system" entry, if present,
+        may be anywhere in the list but is conventionally first;
+        adapters whose provider takes system as a top-level parameter
+        rather than a message (Anthropic) pull it out themselves via
+        llm_router_ledger._messages.extract_system_text.
 
-        system may be None for user-only calls. user_id is forwarded as
-        the SDK's "user" field (end-user identifier; OpenRouter also uses
-        this for request tagging). extra_body is a vendor-specific
-        passthrough dict (e.g. OpenRouter provider routing hints).
-        response_format requests structured output (e.g.
+        usage_dict always carries prompt_tokens, completion_tokens, and
+        total_tokens. Adapters that can report more (reasoning tokens,
+        cache pricing, cost) add it to the same dict under its own key;
+        the dispatcher splits the three normalised keys from the rest
+        before logging, keeping the rest under usage_details. generation_id
+        is the provider's response identifier, or "" if the provider does
+        not return one. When timeout_seconds is None the client-level
+        default applies.
+
+        user_id is forwarded as the SDK's "user" field (end-user identifier;
+        OpenRouter also uses this for request tagging). extra_body is a
+        vendor-specific passthrough dict (e.g. OpenRouter provider routing
+        hints). response_format requests structured output (e.g.
         {"type": "json_object"} for OpenAI JSON mode). All optional;
         adapters that do not support them can ignore.
         """

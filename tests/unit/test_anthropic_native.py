@@ -9,9 +9,34 @@ Anthropic-shaped response is translated correctly into the uniform
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from llm_router_ledger.providers.anthropic_native import AnthropicAdapter
+
+
+def _text_block(text: str) -> MagicMock:
+    """
+    Helper function used to build one Anthropic TextBlock, the only
+    block type that carries a text attribute.
+    """
+    block = MagicMock(spec=["type", "text"])
+    block.type = "text"
+    block.text = text
+    return block
+
+
+def _tool_use_block() -> MagicMock:
+    """
+    Helper function used to build one Anthropic ToolUseBlock. spec omits
+    text deliberately: a tool_use block has no text attribute at all,
+    which is what the adapter has to survive.
+    """
+    block = MagicMock(spec=["type", "id", "name", "input"])
+    block.type = "tool_use"
+    block.name = "get_weather"
+    block.input = {"city": "Singapore"}
+    return block
 
 
 def _fake_client(
@@ -19,18 +44,28 @@ def _fake_client(
     response_text: str = "ok",
     input_tokens: int = 10,
     output_tokens: int = 5,
+    content: list[MagicMock] | None = None,
+    stop_reason: str = "end_turn",
 ) -> MagicMock:
     """
     Helper function used to build a MagicMock Anthropic SDK client whose
     messages.create returns a minimal response with content blocks,
-    usage, and id set in Anthropic's shape.
+    usage, and id set in Anthropic's shape. Pass content to control the
+    block list; the default is a single text block holding response_text.
+
+    stop_reason defaults to the ordinary "end_turn", and is set rather
+    than left to MagicMock, which would auto-vivify it as a truthy mock
+    and write a bogus finish_reason into every usage dict.
     """
     client = MagicMock()
     response = MagicMock()
-    content_block = MagicMock()
-    content_block.text = response_text
-    response.content = [content_block]
+    response.content = (
+        content
+        if content is not None
+        else [_text_block(response_text)]
+    )
     response.id = response_id
+    response.stop_reason = stop_reason
     usage = MagicMock()
     usage.input_tokens = input_tokens
     usage.output_tokens = output_tokens
@@ -39,41 +74,93 @@ def _fake_client(
     return client
 
 
-def test_adapter_omits_system_when_none() -> None:
+def _text_message(role: str, text: str) -> dict[str, object]:
     """
-    With system=None the SDK call omits the system kwarg entirely (rather
-    than passing system=None), matching Anthropic SDK convention for
-    user-only calls.
+    Helper function used to build one content-parts message, the shape
+    send_message's messages parameter and every adapter now share.
+    """
+    return {
+        "role": role,
+        "content": [{"type": "text", "text": text}],
+    }
+
+
+def test_adapter_omits_system_when_no_system_message() -> None:
+    """
+    With no system-role message in the list, the SDK call omits the
+    system kwarg entirely (rather than passing system="" or None),
+    matching Anthropic SDK convention for user-only calls.
     """
     client = _fake_client()
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system=None,
-        user="u",
+        messages=[_text_message("user", "u")],
     )
     call_kwargs = client.messages.create.call_args.kwargs
     assert "system" not in call_kwargs
 
 
-def test_adapter_passes_system_as_top_level_param() -> None:
+def test_adapter_lifts_system_message_to_top_level_param() -> None:
     """
-    When system is provided it lands as the top-level system parameter,
-    not as a message in the messages list. This is the key shape
-    difference from OpenAI chat completions.
+    A system-role message is pulled out of messages and joined into the
+    top-level system parameter, since the Messages API takes system as
+    its own kwarg rather than a message in the list. This is the key
+    shape difference from OpenAI chat completions.
     """
     client = _fake_client()
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="You are concise.",
-        user="hi",
+        messages=[
+            _text_message("system", "You are concise."),
+            _text_message("user", "hi"),
+        ],
     )
     call_kwargs = client.messages.create.call_args.kwargs
     assert call_kwargs["system"] == "You are concise."
-    assert call_kwargs["messages"] == [
-        {"role": "user", "content": "hi"},
+    assert call_kwargs["messages"] == [_text_message("user", "hi")]
+
+
+def test_adapter_joins_multiple_system_messages() -> None:
+    """
+    More than one system-role message (unusual, but not forbidden by
+    the shape) joins into a single system string in order, rather than
+    only the first or last surviving.
+    """
+    client = _fake_client()
+    AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[
+            _text_message("system", "First."),
+            _text_message("system", "Second."),
+            _text_message("user", "hi"),
+        ],
+    )
+    call_kwargs = client.messages.create.call_args.kwargs
+    assert call_kwargs["system"] == "First.\nSecond."
+
+
+def test_adapter_forwards_multi_turn_history() -> None:
+    """
+    A multi-turn messages list (user, assistant, user) reaches the SDK
+    with every non-system entry preserved in order, so conversation
+    history round-trips unchanged.
+    """
+    client = _fake_client()
+    messages = [
+        _text_message("user", "first"),
+        _text_message("assistant", "reply"),
+        _text_message("user", "second"),
     ]
+    AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=messages,
+    )
+    call_kwargs = client.messages.create.call_args.kwargs
+    assert call_kwargs["messages"] == messages
 
 
 def test_adapter_silently_ignores_unsupported_kwargs() -> None:
@@ -87,8 +174,10 @@ def test_adapter_silently_ignores_unsupported_kwargs() -> None:
     AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="s",
-        user="u",
+        messages=[
+            _text_message("system", "s"),
+            _text_message("user", "u"),
+        ],
         user_id="run-tag-123",
         extra_body={"foo": "bar"},
         response_format={"type": "json_object"},
@@ -114,8 +203,10 @@ def test_adapter_translates_response_shape() -> None:
     text, usage, gen_id = AnthropicAdapter().send(
         client=client,
         model="claude-haiku-4-5",
-        system="s",
-        user="u",
+        messages=[
+            _text_message("system", "s"),
+            _text_message("user", "u"),
+        ],
     )
     assert text == "hello world"
     assert usage == {
@@ -124,3 +215,128 @@ def test_adapter_translates_response_shape() -> None:
         "total_tokens": 15,
     }
     assert gen_id == "msg_abc123"
+
+
+def test_adapter_collects_unmapped_usage_keys() -> None:
+    """
+    The Messages API reports cache and tier fields this adapter does not
+    map. They are collected under "unmapped" rather than dropped, which
+    is what makes Anthropic prompt caching visible in the ledger at all.
+    Zero-valued fields are omitted, as elsewhere.
+    """
+    client = _fake_client()
+    client.messages.create.return_value.usage = SimpleNamespace(
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_input_tokens=8960,
+        cache_creation_input_tokens=0,
+        cache_creation={"ephemeral_5m_input_tokens": 8960},
+        service_tier="standard",
+    )
+    _, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage["prompt_tokens"] == 10
+    assert usage["unmapped"] == {
+        "cache_read_input_tokens": 8960,
+        "cache_creation": {"ephemeral_5m_input_tokens": 8960},
+        "service_tier": "standard",
+    }
+
+
+def test_adapter_counts_tool_use_blocks() -> None:
+    """
+    tool_use blocks are counted into completion_tool_call_count so a
+    turn that called tools does not read as an empty response. Text
+    blocks alongside them are still returned, and the count is by block
+    type rather than by absence of text.
+    """
+    client = _fake_client(
+        content=[
+            _text_block("calling a tool"),
+            _tool_use_block(),
+            _tool_use_block(),
+        ],
+    )
+    text, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "calling a tool"
+    assert usage["completion_tool_call_count"] == 2
+
+
+def test_adapter_joins_every_text_block() -> None:
+    """
+    A response carrying more than one text block returns all of them
+    joined, not just the first. Reading content[0] alone silently
+    truncated the response to its opening block.
+    """
+    client = _fake_client(
+        content=[
+            _text_block("first half"),
+            _text_block("second half"),
+        ],
+    )
+    text, _, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "first half\nsecond half"
+
+
+def test_adapter_records_non_ordinary_stop_reason() -> None:
+    """
+    A stop_reason other than "end_turn" reaches usage as finish_reason,
+    the key the OpenAI-compatible adapter uses. max_tokens means the
+    answer was cut off, which the token counts alone do not show.
+    """
+    client = _fake_client(stop_reason="max_tokens")
+    _, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage["finish_reason"] == "max_tokens"
+
+
+def test_adapter_returns_empty_text_for_tool_only_turn() -> None:
+    """
+    A turn made up entirely of tool_use blocks has no text to report, so
+    the adapter returns "" rather than raising. What keeps that row
+    honest in the ledger is completion_tool_call_count, asserted here
+    alongside the empty text.
+    """
+    client = _fake_client(content=[_tool_use_block()])
+    text, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == ""
+    assert usage["completion_tool_call_count"] == 1
+
+
+def test_adapter_skips_blocks_without_text() -> None:
+    """
+    A block that carries no text attribute (tool_use here, thinking
+    likewise) contributes nothing and does not mask the text blocks
+    around it. Reading content[0] alone lost the whole response
+    whenever a non-text block happened to come first.
+    """
+    client = _fake_client(
+        content=[
+            _tool_use_block(),
+            _text_block("the actual answer"),
+        ],
+    )
+    text, _, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert text == "the actual answer"

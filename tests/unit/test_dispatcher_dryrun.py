@@ -25,24 +25,32 @@ def _patch_adapter(
     monkeypatch: pytest.MonkeyPatch,
     response_text: str = "hello world",
     generation_id: str = "gen-abc123",
+    extra_usage: dict[str, object] | None = None,
 ) -> MagicMock:
     """
     Helper function used to mock both get_client and _select_adapter so
     send_message runs entirely offline. Returns the fake adapter so tests
     can inspect adapter.send.call_args.
+
+    extra_usage merges into the base token dict, for tests exercising
+    how send_message splits cost / is_byok / reasoning / cache detail
+    keys into usage_details.
     """
     monkeypatch.setattr(
         "llm_router_ledger.dispatcher.get_client",
         lambda **kw: MagicMock(),
     )
+    usage = {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+    }
+    if extra_usage:
+        usage.update(extra_usage)
     fake = MagicMock()
     fake.send.return_value = (
         response_text,
-        {
-            "prompt_tokens": 5,
-            "completion_tokens": 7,
-            "total_tokens": 12,
-        },
+        usage,
         generation_id,
     )
     monkeypatch.setattr(
@@ -73,8 +81,16 @@ def test_send_message_invokes_adapter_with_kwargs(
     )
     kwargs = fake.send.call_args.kwargs
     assert kwargs["model"] == "llama3.1"
-    assert kwargs["system"] == "sys"
-    assert kwargs["user"] == "usr"
+    assert kwargs["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "sys"}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "usr"}],
+        },
+    ]
     assert kwargs["max_tokens"] == 100
     assert kwargs["temperature"] == 0.2
 
@@ -106,15 +122,117 @@ def test_send_message_system_optional(
     sample_yaml_file: Path,
 ) -> None:
     """
-    system=None reaches the adapter unchanged so user-only calls (e.g.
-    JSON-mode prompts) work.
+    Leaving system unset produces a messages list with no system entry
+    at all, so user-only calls (e.g. JSON-mode prompts) work.
     """
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     fake = _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
     send_message(endpoint_name="ollama-local", user="u", config=config)
     kwargs = fake.send.call_args.kwargs
-    assert kwargs["system"] is None
+    assert kwargs["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "u"}]},
+    ]
+
+
+def test_send_message_messages_replaces_system_and_user(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+) -> None:
+    """
+    A call-level messages list replaces system/user outright rather
+    than merging with them, mirroring the extra_body replace-not-merge
+    rule; system and user are ignored entirely when messages is set.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    fake = _patch_adapter(monkeypatch)
+    config = load_config(sample_yaml_file)
+    custom_messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn one"}],
+        },
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "reply one"}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "turn two"}],
+        },
+    ]
+    send_message(
+        endpoint_name="ollama-local",
+        system="ignored system",
+        user="ignored user",
+        messages=custom_messages,
+        config=config,
+    )
+    kwargs = fake.send.call_args.kwargs
+    assert kwargs["messages"] == custom_messages
+
+
+def test_send_message_requires_user_or_messages(
+    sample_yaml_file: Path,
+) -> None:
+    """
+    Calling send_message with neither user nor messages raises
+    ValueError rather than reaching the adapter with nothing to send.
+    """
+    config = load_config(sample_yaml_file)
+    with pytest.raises(ValueError):
+        send_message(endpoint_name="ollama-local", config=config)
+
+
+def test_send_message_logs_multi_turn_preview(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    With a messages call, the ledger's system_prompt_preview is the
+    joined text of every system-role message and user_prompt_preview is
+    the text of the last user-role message, the turn this call is
+    actually sending, not the entire replayed history.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(monkeypatch)
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(
+        log_path=tmp_log_path,
+        project_id="p",
+        preview_length=200,
+    )
+    send_message(
+        endpoint_name="ollama-local",
+        messages=[
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "be concise"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "turn one"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "reply one"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "turn two"}],
+            },
+        ],
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[0]["system_prompt_preview"] == "be concise"
+    assert entries[0]["user_prompt_preview"] == "turn two"
 
 
 def test_send_message_forwards_user_id_and_extra_body(
@@ -179,14 +297,14 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
         ),
     )
     config = load_config(p)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name="anthropic-test",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "ok"
-    assert gen == "msg_test"
+    assert result.text == "ok"
+    assert result.generation_id == "msg_test"
 
 
 @pytest.mark.parametrize(
@@ -207,6 +325,14 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
             "deepseek-chat",
             "DEEPSEEK_API_KEY",
             "https://api.deepseek.com/v1",
+            "chatcmpl-test",
+        ),
+        # LM Studio serves the OpenAI chat API locally on port 1234.
+        (
+            "lmstudio",
+            "qwen3-4b",
+            "LMSTUDIO_API_KEY",
+            "http://localhost:1234/v1",
             "chatcmpl-test",
         ),
         # MiniMax text API is OpenAI-compatible.
@@ -250,7 +376,16 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
             "chatcmpl-test",
         ),
     ],
-    ids=["azure", "deepseek", "minimax", "ollama", "openai", "qwen", "zhipu"],
+    ids=[
+        "azure",
+        "deepseek",
+        "lmstudio",
+        "minimax",
+        "ollama",
+        "openai",
+        "qwen",
+        "zhipu",
+    ],
 )
 def test_send_message_dispatches_to_openai_compat(
     monkeypatch: pytest.MonkeyPatch,
@@ -302,14 +437,14 @@ def test_send_message_dispatches_to_openai_compat(
         ),
     )
     config = load_config(p)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name=f"{provider}-test",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "ok"
-    assert gen == mock_gen_id
+    assert result.text == "ok"
+    assert result.generation_id == mock_gen_id
 
 
 def test_send_message_omits_user_id_and_extra_body_by_default(
@@ -406,35 +541,121 @@ def test_send_message_no_tracker_writes_nothing(
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
-    text, _, _ = send_message(
+    result = send_message(
         endpoint_name="ollama-local",
         system="sys",
         user="usr",
         config=config,
     )
-    assert text == "hello world"
+    assert result.text == "hello world"
     assert not tmp_log_path.exists()
 
 
-def test_send_message_returns_adapter_tuple(
+def test_send_message_returns_adapter_result(
     monkeypatch: pytest.MonkeyPatch,
     sample_yaml_file: Path,
 ) -> None:
     """
-    Return value is the adapter's tuple unchanged.
+    Return value carries the adapter's tuple unchanged as a ChatResult.
     """
     monkeypatch.setenv("OLLAMA_API_KEY", "x")
     _patch_adapter(monkeypatch)
     config = load_config(sample_yaml_file)
-    text, usage, gen = send_message(
+    result = send_message(
         endpoint_name="ollama-local",
         system="s",
         user="u",
         config=config,
     )
-    assert text == "hello world"
-    assert usage["total_tokens"] == 12
-    assert gen == "gen-abc123"
+    assert result.text == "hello world"
+    assert result.usage["total_tokens"] == 12
+    assert result.generation_id == "gen-abc123"
+
+
+def test_send_message_splits_usage_details(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    The ledger's usage block holds only the three normalised token
+    keys; everything else the adapter reported (cost, is_byok, and the
+    flattened reasoning / cache detail keys) lands in usage_details,
+    matching how create_embeddings already splits its own extras.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(
+        monkeypatch,
+        extra_usage={
+            "cost": 0.0012,
+            "is_byok": False,
+            "completion_reasoning_tokens": 40,
+            "prompt_cached_tokens": 20,
+        },
+    )
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    send_message(
+        endpoint_name="ollama-local",
+        system="sys",
+        user="usr",
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    response = entries[1]
+    assert response["usage"] == {
+        "prompt_tokens": 5,
+        "completion_tokens": 7,
+        "total_tokens": 12,
+    }
+    assert response["usage_details"] == {
+        "cost": 0.0012,
+        "is_byok": False,
+        "completion_reasoning_tokens": 40,
+        "prompt_cached_tokens": 20,
+    }
+
+
+def test_send_message_logs_tool_call_count_with_empty_text(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_yaml_file: Path,
+    tmp_log_path: Path,
+) -> None:
+    """
+    A tool-only turn logs response_length 0, since there is no text.
+    Previews are redacted by default, so completion_tool_call_count in
+    usage_details is the only thing telling a later reader that the row
+    is a tool call rather than a model that answered with nothing.
+    """
+    monkeypatch.setenv("OLLAMA_API_KEY", "x")
+    _patch_adapter(
+        monkeypatch,
+        response_text="",
+        extra_usage={"completion_tool_call_count": 2},
+    )
+    config = load_config(sample_yaml_file)
+    tracker = UsageTracker(log_path=tmp_log_path, project_id="p")
+    send_message(
+        endpoint_name="ollama-local",
+        user="usr",
+        config=config,
+        tracker=tracker,
+    )
+    tracker.close()
+    entries = [
+        json.loads(line)
+        for line in tmp_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    response = entries[1]
+    assert response["response_length"] == 0
+    assert response["usage_details"] == {
+        "completion_tool_call_count": 2,
+    }
 
 
 def test_send_message_unknown_endpoint_raises(

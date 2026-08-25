@@ -204,13 +204,14 @@ def run_embedding_smoke_test(
         project_id=project_id,
     )
     try:
-        vectors, usage, gen_id = create_embeddings(
+        result = create_embeddings(
             endpoint_name=endpoint_name,
             texts=texts,
             config=config,
             tracker=tracker,
             purpose="document-embedding",
         )
+        usage = result.usage
         estimated = (
             endpoint.cost.estimate_cost(
                 input_tokens=usage["prompt_tokens"],
@@ -221,16 +222,23 @@ def run_embedding_smoke_test(
         )
         reported = usage.get("cost")
         logger.info(
-            "vectors=%d dimensions=%d tokens=%d"
-            " reported_cost_usd=%s estimated_cost_usd=%s"
-            " upstream=%s generation_id=%s",
-            len(vectors),
-            usage["dimensions"],
-            usage["prompt_tokens"],
-            _format_usd(reported),
-            _format_usd(estimated),
-            usage.get("upstream_provider", "unreported"),
-            gen_id,
+            "vectors=%(vectors)d dimensions=%(dimensions)d"
+            " tokens=%(tokens)d"
+            " reported_cost_usd=%(reported_cost_usd)s"
+            " estimated_cost_usd=%(estimated_cost_usd)s"
+            " upstream=%(upstream)s"
+            " generation_id=%(generation_id)s",
+            {
+                "vectors": len(result.vectors),
+                "dimensions": usage["dimensions"],
+                "tokens": usage["prompt_tokens"],
+                "reported_cost_usd": _format_usd(reported),
+                "estimated_cost_usd": _format_usd(estimated),
+                "upstream": usage.get(
+                    "upstream_provider", "unreported"
+                ),
+                "generation_id": result.generation_id,
+            },
         )
         logger.info("ledger: %s", log_path.resolve())
         return 0
@@ -262,7 +270,7 @@ def run_smoke_test(
     )
     try:
         for i, workload in enumerate(WORKLOADS, start=1):
-            text, usage, gen_id = send_message(
+            result = send_message(
                 endpoint_name=endpoint_name,
                 system=workload.system,
                 user=workload.user,
@@ -270,13 +278,16 @@ def run_smoke_test(
                 purpose=workload.purpose,
             )
             logger.info(
-                "test=%d use_case=%s response=%r usage=%s"
-                " generation_id=%s",
-                i,
-                workload.use_case,
-                text,
-                usage,
-                gen_id,
+                "test=%(test)d use_case=%(use_case)s"
+                " response=%(response)r usage=%(usage)s"
+                " generation_id=%(generation_id)s",
+                {
+                    "test": i,
+                    "use_case": workload.use_case,
+                    "response": result.text,
+                    "usage": result.usage,
+                    "generation_id": result.generation_id,
+                },
             )
         logger.info("ledger: %s", log_path.resolve())
         return 0

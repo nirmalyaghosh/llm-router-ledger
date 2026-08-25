@@ -54,7 +54,7 @@ class UsageTracker:
         run_tag: str | None = None,
         run_label: str | None = None,
         default_purpose: str = "",
-        preview_length: int = 200,
+        preview_length: int = 0,
         counter_width: int = 4,
         rotate_daily: bool = False,
         backup_count: int = 30,
@@ -65,6 +65,13 @@ class UsageTracker:
         The parent directory of log_path is created if it does not exist.
         run_tag and run_label default to the LRL_RUN_TAG and LRL_RUN_LABEL
         environment variables when not passed explicitly.
+
+        preview_length defaults to 0: prompt and response previews are
+        redacted (written as "[REDACTED]" when the underlying text is
+        non-empty, "" when it genuinely is empty) so no call content
+        reaches the ledger unless a caller opts in. Pass a positive value
+        to store up to that many characters of each prompt and response,
+        truncated with a trailing "..." when the text is longer.
         """
         self._log_path = Path(log_path)
         self._log_path.parent.mkdir(
@@ -128,7 +135,14 @@ class UsageTracker:
         Helper function used to truncate a long prompt or response to
         preview_length chars, suffixed with "..." when truncation actually
         happened.
+
+        preview_length <= 0 means previews are redacted: non-empty text
+        becomes "[REDACTED]" rather than "", so a reader can tell content
+        was withheld apart from content that was never there (e.g. an
+        embedding response, or no system prompt).
         """
+        if self._preview_length <= 0:
+            return "[REDACTED]" if text else ""
         if len(text) <= self._preview_length:
             return text
         return (
@@ -151,16 +165,18 @@ class UsageTracker:
                 subscriber(copy.deepcopy(entry))
             except Exception:
                 logger.exception(
-                    "Usage subscriber %r raised on"
-                    " event %s; the entry is already"
+                    "Usage subscriber %(subscriber)r raised on"
+                    " event %(event)s; the entry is already"
                     " in the ledger and the error is"
                     " being ignored",
-                    getattr(
-                        subscriber,
-                        "__name__",
-                        subscriber,
-                    ),
-                    entry.get("event", "?"),
+                    {
+                        "subscriber": getattr(
+                            subscriber,
+                            "__name__",
+                            subscriber,
+                        ),
+                        "event": entry.get("event", "?"),
+                    },
                 )
 
     def _open_stream(self) -> None:
@@ -291,6 +307,65 @@ class UsageTracker:
             entry["metadata"] = metadata
         self._write_entry(entry)
         return request_id
+
+    def log_error(
+        self,
+        *,
+        request_id: str,
+        model: str,
+        error_type: str,
+        error_message: str,
+        status_code: int | None = None,
+        purpose: str | None = None,
+        provider: str = "",
+        modality: str = "text",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Write an llm_error event for a call that raised.
+
+        Shares request_id with the llm_request that preceded it, so a
+        failure pairs the same way a success does and no request is left
+        orphaned. A third event type rather than an llm_response with an
+        error field: a failed call produced no tokens, and writing zeroes
+        into usage would corrupt anyone summing them.
+
+        error_type is the original exception's class name, kept because
+        the wrapped class the caller sees is coarser than what the SDK
+        raised. status_code is the provider's HTTP status where there was
+        one, and is omitted for transport failures.
+
+        The SDK retries internally before raising, so one llm_error
+        stands for however many attempts it made.
+        """
+        entry: dict[str, Any] = {
+            "event": "llm_error",
+            "project_id": self._project_id,
+            "purpose": (
+                purpose
+                if purpose is not None
+                else self._default_purpose
+            ),
+            "request_id": request_id,
+            "run_tag": self._run_tag,
+            "run_label": self._run_label,
+            "timestamp": (
+                datetime.now(timezone.utc)
+                .isoformat()
+            ),
+            "model": model,
+            "error_type": error_type,
+            "error_message": error_message,
+        }
+        if status_code is not None:
+            entry["status_code"] = status_code
+        if provider:
+            entry["provider"] = provider
+        if modality != "text":
+            entry["modality"] = modality
+        if metadata:
+            entry["metadata"] = metadata
+        self._write_entry(entry)
 
     def log_response(
         self,

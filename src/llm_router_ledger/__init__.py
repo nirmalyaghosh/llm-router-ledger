@@ -3,8 +3,9 @@ llm-router-ledger: route any LLM call and keep a JSONL ledger of every
 request and response for offline cost reconciliation.
 
 Public surface:
-- send_message: primary entry point.
-- create_embeddings: vector embeddings entry point.
+- send_message: primary entry point, returns a ChatResult.
+- create_embeddings: vector embeddings entry point, returns an
+  EmbeddingResult.
 - UsageTracker: append-only JSONL logger.
 - load_config, LLMConfig: YAML config + types.
 - Exceptions rooted at LLMCallError.
@@ -33,12 +34,20 @@ from llm_router_ledger.dispatcher import (
     send_message,
 )
 from llm_router_ledger.exceptions import (
+    AuthenticationError,
     ConfigError,
     EndpointNotFoundError,
+    InsufficientBalanceError,
     LLMCallError,
     MissingApiKeyError,
     ProviderError,
+    ProviderUnavailableError,
+    RateLimitedError,
     UsageTrackerError,
+)
+from llm_router_ledger.results import (
+    ChatResult,
+    EmbeddingResult,
 )
 from llm_router_ledger.usage_tracker import (
     UsageTracker,
@@ -52,15 +61,21 @@ except PackageNotFoundError:
 
 
 __all__ = [
+    "ChatResult",
+    "AuthenticationError",
     "ConfigError",
     "CostConfig",
     "DefaultsConfig",
+    "EmbeddingResult",
     "EndpointConfig",
     "EndpointNotFoundError",
     "LLMCallError",
     "LLMConfig",
+    "InsufficientBalanceError",
     "MissingApiKeyError",
     "ProviderError",
+    "ProviderUnavailableError",
+    "RateLimitedError",
     "ProviderName",
     "UsageTracker",
     "UsageTrackerError",

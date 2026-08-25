@@ -250,25 +250,25 @@ def test_create_embeddings_omits_expected_dimensions_when_unset(
     assert kwargs["expected_dimensions"] is None
 
 
-def test_create_embeddings_returns_adapter_tuple(
+def test_create_embeddings_returns_adapter_result(
     monkeypatch: pytest.MonkeyPatch,
     embedding_config: LLMConfig,
 ) -> None:
     """
-    The caller gets the adapter's tuple unchanged, including the
-    embedding extras in usage. Only the ledger splits them out.
+    The caller gets the adapter's usage unchanged in result.usage,
+    including the embedding extras. Only the ledger splits them out.
     """
     _patch_embedding_adapter(monkeypatch)
-    vectors, usage, generation_id = create_embeddings(
+    result = create_embeddings(
         endpoint_name="embed-with-dims",
         texts=["a", "b"],
         config=embedding_config,
     )
-    assert vectors == [[0.1, 0.2], [0.3, 0.4]]
-    assert usage["total_tokens"] == 9
-    assert usage["dimensions"] == 2
-    assert usage["cost"] == 4.5e-08
-    assert generation_id == "gen-emb-abc123"
+    assert result.vectors == [[0.1, 0.2], [0.3, 0.4]]
+    assert result.usage["total_tokens"] == 9
+    assert result.usage["dimensions"] == 2
+    assert result.usage["cost"] == 4.5e-08
+    assert result.generation_id == "gen-emb-abc123"
 
 
 def test_create_embeddings_splits_usage_into_details(
@@ -366,6 +366,26 @@ def test_select_embedding_adapter_accepts_ollama() -> None:
     provider fields OpenRouter adds.
     """
     adapter = _select_embedding_adapter("ollama")
+    assert isinstance(
+        adapter,
+        OpenAICompatEmbeddingAdapter,
+    )
+
+
+def test_select_embedding_adapter_accepts_lmstudio() -> None:
+    """
+    LM Studio resolves to the same shared adapter as Ollama. It was
+    verified end-to-end against Qwen3-Embedding-0.6B at Q8_0, the same
+    model and quantisation Ollama serves, returning identical 1024-wide
+    vectors.
+
+    It reports prompt_tokens and total_tokens as zero for embeddings at
+    any input size, so its rows record a token count of 0 rather than
+    the true figure. That is a reporting gap in the server, not a
+    parsing difference: the response is otherwise well formed and needs
+    no adapter of its own.
+    """
+    adapter = _select_embedding_adapter("lmstudio")
     assert isinstance(
         adapter,
         OpenAICompatEmbeddingAdapter,

@@ -20,6 +20,17 @@ from llm_router_ledger.exceptions import (
     MissingApiKeyError,
 )
 
+# An OpenRouter ":free" variant, whose colon sits at the end of the
+# model string rather than in front of a provider prefix.
+_FREE_VARIANT_YAML = """endpoints:
+  free-model:
+    provider: openrouter
+    model: nvidia/nemotron-3.5-lightning:free
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 1000000
+"""
+
 
 def test_cost_days_since_checked_none() -> None:
     """
@@ -50,10 +61,10 @@ def test_cost_estimate_basic() -> None:
     assert actual == pytest.approx(0.005)
 
 
-def test_cost_estimate_cache_hit_uses_cached_rate() -> None:
+def test_cost_estimate_fully_cached_uses_cache_rate() -> None:
     """
-    When cache_hit is True and a cache rate is set, the cache rate
-    replaces the regular input rate.
+    When every input token is cached, the cache rate replaces the
+    regular input rate entirely.
     """
     cost = CostConfig(
         input_per_1m=1.0,
@@ -63,9 +74,107 @@ def test_cost_estimate_cache_hit_uses_cached_rate() -> None:
     actual = cost.estimate_cost(
         input_tokens=1000,
         output_tokens=1000,
-        cache_hit=True,
+        cached_tokens=1000,
     )
     assert actual == pytest.approx(0.0021)
+
+
+def test_cost_estimate_partial_cache_hit_mixes_rates() -> None:
+    """
+    A real call can mix cached and uncached input in one prompt; only
+    the cached subset bills at the cache rate.
+    """
+    cost = CostConfig(
+        input_per_1m=1.0,
+        output_per_1m=2.0,
+        cache_hit_input_per_1m=0.1,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=500,
+        cached_tokens=400,
+    )
+    assert actual == pytest.approx(0.00164)
+
+
+def test_cost_estimate_cache_write_uses_cache_write_rate() -> None:
+    """
+    cache_write_tokens bills at cache_write_input_per_1m, which is
+    typically higher than the base input rate.
+    """
+    cost = CostConfig(
+        input_per_1m=1.0,
+        output_per_1m=2.0,
+        cache_write_input_per_1m=3.0,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cache_write_tokens=300,
+    )
+    assert actual == pytest.approx(0.0016)
+
+
+def test_cost_estimate_missing_cache_write_rate_uses_input_rate() -> None:
+    """
+    With no cache_write_input_per_1m configured, cache-write tokens
+    bill at the standard input rate instead.
+    """
+    cost = CostConfig(input_per_1m=2.0, output_per_1m=0.0)
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cache_write_tokens=300,
+    )
+    assert actual == pytest.approx(0.002)
+
+
+def test_cost_estimate_zero_cache_rate_is_free_not_unset() -> None:
+    """
+    An explicit cache_hit_input_per_1m of 0.0 is a genuinely free cache
+    tier and must not be treated as "unset" and fall back to the
+    regular input rate.
+    """
+    cost = CostConfig(
+        input_per_1m=5.0,
+        output_per_1m=0.0,
+        cache_hit_input_per_1m=0.0,
+    )
+    actual = cost.estimate_cost(
+        input_tokens=1000,
+        output_tokens=0,
+        cached_tokens=1000,
+    )
+    assert actual == 0.0
+
+
+def test_cost_estimate_raises_when_cached_tokens_exceed_input() -> None:
+    """
+    cached_tokens alone exceeding input_tokens raises rather than
+    silently producing a negative charge for the remainder.
+    """
+    cost = CostConfig(input_per_1m=1.0, output_per_1m=2.0)
+    with pytest.raises(ValueError):
+        cost.estimate_cost(
+            input_tokens=100,
+            output_tokens=0,
+            cached_tokens=150,
+        )
+
+
+def test_cost_estimate_raises_when_cache_tokens_sum_exceeds_input() -> None:
+    """
+    cached_tokens and cache_write_tokens together exceeding
+    input_tokens also raises, even when neither alone does.
+    """
+    cost = CostConfig(input_per_1m=1.0, output_per_1m=2.0)
+    with pytest.raises(ValueError):
+        cost.estimate_cost(
+            input_tokens=100,
+            output_tokens=0,
+            cached_tokens=60,
+            cache_write_tokens=60,
+        )
 
 
 def test_embedding_dimensions_loads_and_defaults_to_none(
@@ -169,6 +278,45 @@ def test_get_context_window_finds_match(sample_yaml_file: Path) -> None:
     config = load_config(sample_yaml_file)
     actual = get_context_window(model="llama3.1", config=config)
     assert actual == 8192
+
+
+def test_get_context_window_matches_free_variant(
+    tmp_path: Path,
+) -> None:
+    """
+    An OpenRouter ":free" model string matches its own endpoint. Reading
+    the colon as a provider prefix would leave "free" as the bare name,
+    which matches nothing and silently returns the default.
+    """
+    path = tmp_path / "llm_endpoints.yaml"
+    path.write_text(_FREE_VARIANT_YAML, encoding="utf-8")
+    config = load_config(path)
+    actual = get_context_window(
+        model="nvidia/nemotron-3.5-lightning:free",
+        config=config,
+    )
+    assert actual == 1000000
+
+
+def test_get_context_window_strips_prefix_from_free_variant(
+    tmp_path: Path,
+) -> None:
+    """
+    A provider prefix is still stripped when the remainder is itself a
+    ":free" variant, so both spellings resolve to the same endpoint.
+
+    This spelling was never broken: splitting on the first colon
+    already left the ":free" tail intact. The test guards the prefix
+    path now that it runs through a candidate loop.
+    """
+    path = tmp_path / "llm_endpoints.yaml"
+    path.write_text(_FREE_VARIANT_YAML, encoding="utf-8")
+    config = load_config(path)
+    actual = get_context_window(
+        model="openrouter:nvidia/nemotron-3.5-lightning:free",
+        config=config,
+    )
+    assert actual == 1000000
 
 
 def test_get_context_window_strips_provider_prefix(
@@ -291,14 +439,14 @@ def test_load_config_returns_typed_objects(
     assert ep.context_window == 8192
 
 
-def test_local_openai_compat_emits_deprecation_warning(
+def test_local_openai_compat_is_rejected_with_migration_hint(
     tmp_path: Path,
 ) -> None:
     """
-    Loading a YAML with provider: local-openai-compat emits a
-    DeprecationWarning pointing at the specific replacement options
-    (e.g. ollama). The endpoint still loads successfully so existing
-    configs keep working until 0.2.0 removes the alias.
+    provider: local-openai-compat was deprecated in 0.1.2 and removed
+    in 0.2.0, so load_config now rejects it. The error identifies the
+    endpoint and the replacement provider names rather than relying on
+    Pydantic's enumeration of every valid value.
     """
     yaml_text = (
         "endpoints:\n"
@@ -310,12 +458,9 @@ def test_local_openai_compat_emits_deprecation_warning(
     )
     p = tmp_path / "with_legacy.yaml"
     p.write_text(yaml_text, encoding="utf-8")
-    with pytest.warns(
-        DeprecationWarning,
-        match="local-openai-compat",
-    ):
-        config = load_config(p)
-    assert (
-        config.endpoints["legacy-local"].provider
-        == "local-openai-compat"
-    )
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(p)
+    message = str(excinfo.value)
+    assert "legacy-local" in message
+    assert "ollama" in message
+    assert "lmstudio" in message

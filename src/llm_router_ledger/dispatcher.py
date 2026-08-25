@@ -3,9 +3,8 @@ Public send_message and create_embeddings entry points.
 
 Each resolves an endpoint, gets the SDK client, picks the adapter for
 that capability, calls it, optionally appends paired llm_request and
-llm_response events via a UsageTracker, and returns the standard tuple
-(payload, usage_dict, generation_id). The payload is the response text
-for send_message and the list of vectors for create_embeddings.
+llm_response events via a UsageTracker, and returns a result object:
+ChatResult for send_message, EmbeddingResult for create_embeddings.
 """
 
 from __future__ import annotations
@@ -14,6 +13,12 @@ import copy
 
 from typing import Any
 
+from llm_router_ledger._errors import wrap_provider_exception
+from llm_router_ledger._messages import (
+    build_messages,
+    extract_system_text,
+    extract_text,
+)
 from llm_router_ledger.client_factory import (
     get_client,
     get_model_name,
@@ -37,6 +42,10 @@ from llm_router_ledger.providers.openai_compat import (
     OpenAICompatAdapter,
     OpenAICompatEmbeddingAdapter,
 )
+from llm_router_ledger.results import (
+    ChatResult,
+    EmbeddingResult,
+)
 from llm_router_ledger.usage_tracker import UsageTracker
 
 
@@ -47,6 +56,7 @@ _TOKEN_USAGE_KEYS = frozenset({
 })
 
 _VERIFIED_EMBEDDING_PROVIDERS = frozenset({
+    "lmstudio",
     "ollama",
     "openrouter",
 })
@@ -55,7 +65,7 @@ _VERIFIED_PROVIDERS = frozenset({
     "anthropic",
     "azure",
     "deepseek",
-    "local-openai-compat",
+    "lmstudio",
     "minimax",
     "ollama",
     "openai",
@@ -115,6 +125,30 @@ def _resolve_extra_body(
     return copy.deepcopy(chosen)
 
 
+def _resolve_messages(
+    *,
+    messages: list[dict[str, Any]] | None,
+    system: str | None,
+    user: str | None,
+) -> list[dict[str, Any]]:
+    """
+    Helper function used to pick the messages list for a single call. A
+    call-level messages list replaces system/user outright rather than
+    merging with them, mirroring the rule _resolve_extra_body already
+    follows for the endpoint/call layering.
+
+    Raises ValueError when neither messages nor user is supplied, since
+    a call needs some content to send.
+    """
+    if messages is not None:
+        return messages
+    if user is None:
+        raise ValueError(
+            "send_message requires either 'user' or 'messages'"
+        )
+    return build_messages(system=system, user=user)
+
+
 def _select_adapter(provider: str) -> ProviderAdapter:
     """
     Helper function used to pick the provider adapter for a given provider
@@ -146,10 +180,12 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     serve no embedding models at all, and the rest were not exercised
     end-to-end in this release.
 
-    Note that "local-openai-compat" is deliberately absent even though
-    "ollama" is present. Ollama's embeddings endpoint was verified
-    directly; LM Studio, llama.cpp and vLLM share that provider name
-    and were not.
+    Both local-server names are verified. Neither returns a response
+    id, so their rows carry an empty provider_response_id. LM Studio
+    additionally leaves prompt_tokens and total_tokens at zero for
+    embeddings, so those rows record the vectors and their width but
+    no token count. Nothing is billed either way, so there is no
+    invoice to reconcile against.
     """
     if provider not in _VERIFIED_EMBEDDING_PROVIDERS:
         verified = ", ".join(
@@ -159,24 +195,28 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
             f"Embeddings are not available for the '{provider}'"
             f" provider. Verified embedding providers in this"
             f" release: {verified}. Point the endpoint at OpenRouter"
-            f" for hosted embedding models, or at Ollama to run one"
-            f" locally."
+            f" for hosted embedding models, or at Ollama or LM Studio"
+            f" to run one locally."
         )
     return OpenAICompatEmbeddingAdapter()
 
 
-def _split_embedding_usage(
+def _split_usage(
     usage: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """
-    Helper function used to divide an embedding adapter's usage dict into
-    the three normalised token keys the ledger's usage block holds and
-    the remainder, which belongs in usage_details (dimensions,
-    embedding_count, cost, is_byok, upstream_provider).
+    Helper function used to divide an adapter's usage dict into the
+    three normalised token keys the ledger's usage block holds and the
+    remainder, which belongs in usage_details (e.g. dimensions and
+    embedding_count for create_embeddings; cost, is_byok, and the
+    flattened cache/reasoning detail keys for send_message).
 
     The split is by token key rather than by a list of known extras, so a
     value a provider starts returning later lands in usage_details on its
-    own instead of being silently dropped.
+    own instead of being silently dropped. The adapters uphold the same
+    rule upstream: a usage key they have no mapping for is collected
+    under usage_details["unmapped"] rather than discarded.
+    Modality-agnostic: the same function serves both entry points.
     """
     tokens = {
         key: value
@@ -201,14 +241,13 @@ def create_embeddings(
     metadata: dict[str, Any] | None = None,
     timeout_seconds: float | None = None,
     extra_body: dict[str, Any] | None = None,
-) -> tuple[list[list[float]], dict[str, Any], str]:
+) -> EmbeddingResult:
     """
-    Embed texts on the named endpoint and return (vectors, usage_dict,
-    generation_id).
+    Embed texts on the named endpoint and return an EmbeddingResult.
 
-    vectors is ordered to match texts, one vector per input.
+    result.vectors is ordered to match texts, one vector per input.
 
-    usage_dict carries the normalised prompt_tokens, completion_tokens,
+    result.usage carries the normalised prompt_tokens, completion_tokens,
     and total_tokens keys plus whatever the provider reported about the
     call: dimensions and embedding_count always, and cost, is_byok, and
     upstream_provider when available. The caller gets all of it; the
@@ -262,18 +301,38 @@ def create_embeddings(
             metadata=metadata,
         )
 
-    vectors, usage, generation_id = adapter.embed(
-        client=client,
-        model=model,
-        texts=texts,
-        expected_dimensions=ep.embedding_dimensions,
-        timeout_seconds=timeout_seconds,
-        extra_body=effective_extra_body,
-    )
+    try:
+        vectors, usage, generation_id = adapter.embed(
+            client=client,
+            model=model,
+            texts=texts,
+            expected_dimensions=ep.embedding_dimensions,
+            timeout_seconds=timeout_seconds,
+            extra_body=effective_extra_body,
+        )
+    except Exception as exc:
+        wrapped = wrap_provider_exception(exc, endpoint_name)
+        if tracker is not None:
+            tracker.log_error(
+                request_id=request_id,
+                model=model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                status_code=getattr(
+                    wrapped, "status_code", None
+                ),
+                purpose=purpose,
+                provider=ep.provider,
+                modality="embedding",
+                metadata=metadata,
+            )
+        if wrapped is exc:
+            raise
+        raise wrapped from exc
 
     if tracker is not None:
         token_usage, usage_details = (
-            _split_embedding_usage(usage)
+            _split_usage(usage)
         )
         # response_text is empty because an embedding response carries no
         # text: recording a stand-in would put a fabricated
@@ -292,14 +351,19 @@ def create_embeddings(
             metadata=metadata,
         )
 
-    return vectors, usage, generation_id
+    return EmbeddingResult(
+        vectors=vectors,
+        usage=usage,
+        generation_id=generation_id,
+    )
 
 
 def send_message(
     *,
     endpoint_name: str,
-    user: str,
+    user: str | None = None,
     system: str | None = None,
+    messages: list[dict[str, Any]] | None = None,
     config: LLMConfig | None = None,
     tracker: UsageTracker | None = None,
     purpose: str = "",
@@ -310,17 +374,36 @@ def send_message(
     user_id: str | None = None,
     extra_body: dict[str, Any] | None = None,
     response_format: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, int], str]:
+) -> ChatResult:
     """
-    Send a system + user message to the named endpoint and return
-    (response_text, usage_dict, generation_id).
+    Send a message to the named endpoint and return a ChatResult.
+
+    result.usage carries the normalised prompt_tokens, completion_tokens,
+    and total_tokens keys plus whatever else the provider reported: cost,
+    is_byok, and upstream_provider when available, and the flattened
+    contents of completion_tokens_details / prompt_tokens_details under a
+    completion_ / prompt_ prefix (e.g. completion_reasoning_tokens,
+    prompt_cached_tokens). The caller gets all of it; the ledger splits
+    it, keeping the token keys in the usage block and the rest under
+    usage_details, the same rule create_embeddings follows.
 
     When tracker is provided, paired llm_request and llm_response events
     are appended to its JSONL log. When tracker is None, no logging
     happens.
 
-    system is optional; pass None for user-only calls (common with
-    JSON-mode prompts that embed all instructions in the user message).
+    system + user is the single-turn convenience form; system is
+    optional, pass None for user-only calls (common with JSON-mode
+    prompts that embed all instructions in the user message).
+
+    messages is the multi-turn form, for conversation history, tool
+    loops, or any call system/user cannot express. Each entry is
+    {"role": "system" | "user" | "assistant", "content":
+    [{"type": "text", "text": ...}]}, the OpenAI content-parts shape,
+    kept even though image parts are not supported yet so that adding
+    them later is additive. When messages is supplied it replaces
+    system and user outright rather than merging with them, the same
+    rule extra_body follows against its endpoint-level default. Exactly
+    one of messages or user must be supplied.
 
     user_id is forwarded as the SDK's "user" field (OpenRouter run
     tagging, OpenAI end-user identifier). extra_body is a vendor-specific
@@ -334,9 +417,9 @@ def send_message(
     itself. Note that the Anthropic adapter ignores extra_body entirely,
     so the endpoint field has no effect on provider "anthropic".
 
-    Raises EndpointNotFoundError if the endpoint name is missing, and
-    NotImplementedError if the endpoint points at the Anthropic provider
-    (the Anthropic adapter lands in a later minor release).
+    Raises EndpointNotFoundError if the endpoint name is missing,
+    NotImplementedError if the endpoint's provider has no verified chat
+    adapter, and ValueError if neither messages nor user is supplied.
     """
     config, ep = _resolve_endpoint(
         config=config,
@@ -346,6 +429,11 @@ def send_message(
     effective_extra_body = _resolve_extra_body(
         call_value=extra_body,
         endpoint_value=ep.extra_body,
+    )
+    effective_messages = _resolve_messages(
+        messages=messages,
+        system=system,
+        user=user,
     )
     model = get_model_name(
         endpoint_name=endpoint_name,
@@ -358,38 +446,74 @@ def send_message(
 
     request_id = ""
     if tracker is not None:
+        latest_user_messages = [
+            message
+            for message in effective_messages
+            if message.get("role") == "user"
+        ]
+        latest_user_prompt = (
+            extract_text(latest_user_messages[-1].get("content"))
+            if latest_user_messages
+            else ""
+        )
         request_id = tracker.log_request(
             model=model,
-            system_prompt=system or "",
-            user_prompt=user,
+            system_prompt=extract_system_text(effective_messages),
+            user_prompt=latest_user_prompt,
             purpose=purpose,
             provider=ep.provider,
             metadata=metadata,
         )
 
-    text, usage, generation_id = adapter.send(
-        client=client,
-        model=model,
-        system=system,
-        user=user,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout_seconds=timeout_seconds,
-        user_id=user_id,
-        extra_body=effective_extra_body,
-        response_format=response_format,
-    )
+    try:
+        text, usage, generation_id = adapter.send(
+            client=client,
+            model=model,
+            messages=effective_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            user_id=user_id,
+            extra_body=effective_extra_body,
+            response_format=response_format,
+        )
+    except Exception as exc:
+        wrapped = wrap_provider_exception(exc, endpoint_name)
+        if tracker is not None:
+            tracker.log_error(
+                request_id=request_id,
+                model=model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                status_code=getattr(
+                    wrapped, "status_code", None
+                ),
+                purpose=purpose,
+                provider=ep.provider,
+                metadata=metadata,
+            )
+        if wrapped is exc:
+            raise
+        raise wrapped from exc
 
     if tracker is not None:
+        token_usage, usage_details = (
+            _split_usage(usage)
+        )
         tracker.log_response(
             request_id=request_id,
             model=model,
             response_text=text,
-            usage=usage,
+            usage=token_usage,
             generation_id=generation_id,
             purpose=purpose,
             provider=ep.provider,
+            usage_details=usage_details,
             metadata=metadata,
         )
 
-    return text, usage, generation_id
+    return ChatResult(
+        text=text,
+        usage=usage,
+        generation_id=generation_id,
+    )
