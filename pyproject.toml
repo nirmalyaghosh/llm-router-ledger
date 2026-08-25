@@ -1,10 +1,13 @@
 [build-system]
-requires = ["hatchling"]
+# Pinned below 1.27: newer hatchling emits Metadata-Version 2.5
+# (PEP 794), which twine rejects and PyPI does not yet accept.
+# Revisit once the toolchain catches up.
+requires = ["hatchling<1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "llm-router-ledger"
-version = "0.1.4"
+version = "0.2.0"
 description = "Route text and embedding calls across LLM providers, keeping a JSONL ledger of every request and response for offline cost reconciliation."
 readme = "README.md"
 license = { file = "LICENSE" }
