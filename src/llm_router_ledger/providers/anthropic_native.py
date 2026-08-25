@@ -22,7 +22,18 @@ from __future__ import annotations
 from typing import Any
 
 from llm_router_ledger._messages import extract_system_text
-from llm_router_ledger.providers._base import ProviderAdapter
+from llm_router_ledger.providers._base import (
+    ProviderAdapter,
+    collect_unmapped,
+)
+
+# Top-level usage keys this adapter maps itself. The Messages API
+# reports cache and tier fields besides these, which are collected
+# under usage_details["unmapped"].
+_MAPPED_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+)
 
 
 # The Messages API name for an ordinary completion, its spelling of the
@@ -65,10 +76,14 @@ class AnthropicAdapter(ProviderAdapter):
         and tool_use blocks are skipped rather than read as empty. A
         turn made up entirely of non-text blocks therefore returns "".
 
-        usage_dict carries only the three normalised token keys; the
-        Messages API reports no cost, cache, or reasoning detail on an
-        ordinary call the way OpenRouter does, so there is nothing else
-        to add. The one exception is completion_tool_call_count, the
+        usage_dict carries the three normalised token keys. The
+        Messages API reports no cost, and no reasoning detail on an
+        ordinary call, but it does report cache fields
+        (cache_read_input_tokens, cache_creation_input_tokens and a
+        cache_creation breakdown) plus service_tier and
+        inference_geo. This adapter maps none of those, so they are
+        collected under an "unmapped" sub-dict rather than dropped.
+        Also present is completion_tool_call_count, the
         number of tool_use blocks in the response, added so a tool-only
         turn does not read as an empty response. It is unreachable
         today: this library exposes no tools parameter and this adapter
@@ -141,5 +156,8 @@ class AnthropicAdapter(ProviderAdapter):
         stop_reason = getattr(response, "stop_reason", None)
         if stop_reason and stop_reason != ORDINARY_STOP_REASON:
             usage["finish_reason"] = stop_reason
+        unmapped = collect_unmapped(raw, _MAPPED_USAGE_KEYS)
+        if unmapped:
+            usage["unmapped"] = unmapped
 
         return text, usage, response.id or ""

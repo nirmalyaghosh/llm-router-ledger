@@ -9,6 +9,7 @@ Anthropic-shaped response is translated correctly into the uniform
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from llm_router_ledger.providers.anthropic_native import AnthropicAdapter
@@ -214,6 +215,35 @@ def test_adapter_translates_response_shape() -> None:
         "total_tokens": 15,
     }
     assert gen_id == "msg_abc123"
+
+
+def test_adapter_collects_unmapped_usage_keys() -> None:
+    """
+    The Messages API reports cache and tier fields this adapter does not
+    map. They are collected under "unmapped" rather than dropped, which
+    is what makes Anthropic prompt caching visible in the ledger at all.
+    Zero-valued fields are omitted, as elsewhere.
+    """
+    client = _fake_client()
+    client.messages.create.return_value.usage = SimpleNamespace(
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_input_tokens=8960,
+        cache_creation_input_tokens=0,
+        cache_creation={"ephemeral_5m_input_tokens": 8960},
+        service_tier="standard",
+    )
+    _, usage, _ = AnthropicAdapter().send(
+        client=client,
+        model="claude-haiku-4-5",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage["prompt_tokens"] == 10
+    assert usage["unmapped"] == {
+        "cache_read_input_tokens": 8960,
+        "cache_creation": {"ephemeral_5m_input_tokens": 8960},
+        "service_tier": "standard",
+    }
 
 
 def test_adapter_counts_tool_use_blocks() -> None:

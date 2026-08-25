@@ -16,6 +16,61 @@ from abc import (
 from typing import Any
 
 
+def as_usage_dict(obj: Any) -> dict[str, Any]:
+    """
+    Best-effort dict view of an SDK usage object, which may be a
+    pydantic model or a plain dict depending on the provider's SDK.
+    """
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        return dict(obj)
+    dump = getattr(obj, "model_dump", None)
+    if callable(dump):
+        try:
+            return dict(dump())
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        key: value
+        for key, value in vars(obj).items()
+        if not key.startswith("_")
+    }
+
+
+def collect_unmapped(
+    raw: Any,
+    mapped: tuple[str, ...],
+    blocks: tuple[tuple[str, tuple[str, ...], str], ...] = (),
+) -> dict[str, Any]:
+    """
+    Gather the usage keys an adapter has no mapping for, so a
+    provider-specific field reaches the ledger under
+    usage_details["unmapped"] rather than being dropped.
+
+    mapped names the top-level keys the adapter handles itself. blocks
+    names each nested detail block as (block name, keys the adapter
+    maps, prefix), so an unmapped key inside one takes the same prefix
+    its mapped siblings take. Falsy values are omitted throughout,
+    matching how the adapters write cost and the detail keys only when
+    the provider actually reports them.
+
+    Keys collected here are unstable by design: one that later gains an
+    explicit mapping moves out of "unmapped" and up a level.
+    """
+    usage = as_usage_dict(raw)
+    unmapped: dict[str, Any] = {}
+    for key, value in usage.items():
+        if key not in mapped and value:
+            unmapped[key] = value
+    for block, known, prefix in blocks:
+        block_items = as_usage_dict(usage.get(block)).items()
+        for key, value in block_items:
+            if key not in known and value:
+                unmapped[f"{prefix}{key}"] = value
+    return unmapped
+
+
 class EmbeddingAdapter(ABC):
     """
     Uniform embed interface for a single provider family.

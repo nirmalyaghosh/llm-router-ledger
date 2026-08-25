@@ -234,6 +234,72 @@ def test_adapter_captures_cost_and_reasoning_detail() -> None:
         assert absent_key not in usage_out
 
 
+def test_adapter_collects_unmapped_usage_keys() -> None:
+    """
+    A usage key the adapter has no mapping for is collected under
+    "unmapped" rather than dropped. A top-level key keeps its own name;
+    a key inside a detail block takes the same prompt_ / completion_
+    prefix its mapped siblings take. The shape below is DeepSeek's
+    top-level cache keys and Qwen's text_tokens, both observed live.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=9007,
+        completion_tokens=1,
+        total_tokens=9008,
+        prompt_cache_hit_tokens=8960,
+        prompt_cache_miss_tokens=47,
+        completion_tokens_details=SimpleNamespace(
+            reasoning_tokens=0,
+            text_tokens=352,
+        ),
+        prompt_tokens_details=SimpleNamespace(
+            cached_tokens=8960,
+            text_tokens=17,
+        ),
+    )
+    client = _client_returning(_fake_response(usage=usage))
+    _, usage_out, _ = OpenAICompatAdapter().send(
+        client=client,
+        model="m",
+        messages=[_text_message("user", "u")],
+    )
+    assert usage_out["prompt_cached_tokens"] == 8960
+    assert usage_out["unmapped"] == {
+        "prompt_cache_hit_tokens": 8960,
+        "prompt_cache_miss_tokens": 47,
+        "completion_text_tokens": 352,
+        "prompt_text_tokens": 17,
+    }
+
+
+def test_adapter_omits_unmapped_when_every_key_maps() -> None:
+    """
+    OpenAI's own API reports nothing this adapter cannot place, so the
+    usage dict carries no "unmapped" key at all rather than an empty
+    one, matching how the other optional keys are written.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=14,
+        completion_tokens=1,
+        total_tokens=15,
+        completion_tokens_details=SimpleNamespace(
+            reasoning_tokens=0,
+            audio_tokens=0,
+        ),
+        prompt_tokens_details=SimpleNamespace(
+            cached_tokens=0,
+            audio_tokens=0,
+        ),
+    )
+    client = _client_returning(_fake_response(usage=usage))
+    _, usage_out, _ = OpenAICompatAdapter().send(
+        client=client,
+        model="m",
+        messages=[_text_message("user", "u")],
+    )
+    assert "unmapped" not in usage_out
+
+
 def test_adapter_counts_tool_calls_on_tool_only_turn() -> None:
     """
     A turn that returns only tool calls sets message.content to null,

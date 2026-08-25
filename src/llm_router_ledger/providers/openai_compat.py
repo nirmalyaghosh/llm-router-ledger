@@ -21,6 +21,7 @@ from llm_router_ledger.exceptions import ProviderError
 from llm_router_ledger.providers._base import (
     EmbeddingAdapter,
     ProviderAdapter,
+    collect_unmapped,
 )
 
 
@@ -47,6 +48,20 @@ _PROMPT_DETAIL_KEYS = (
     "cache_write_tokens",
     "cached_tokens",
     "video_tokens",
+)
+
+# Top-level usage keys this adapter maps itself. Anything else the
+# provider reports is collected under usage_details["unmapped"],
+# e.g. DeepSeek's prompt_cache_hit_tokens or Azure's
+# latency_checkpoint.
+_MAPPED_USAGE_KEYS = (
+    "completion_tokens",
+    "completion_tokens_details",
+    "cost",
+    "is_byok",
+    "prompt_tokens",
+    "prompt_tokens_details",
+    "total_tokens",
 )
 
 
@@ -118,6 +133,8 @@ class OpenAICompatAdapter(ProviderAdapter):
         the flattened contents of completion_tokens_details and
         prompt_tokens_details under a completion_ / prompt_ prefix
         (e.g. completion_reasoning_tokens, prompt_cached_tokens).
+        Any usage key this adapter has no mapping for is collected
+        under an "unmapped" sub-dict rather than dropped.
         generation_id is response.id; the downstream tracker routes
         "gen-" prefixed IDs to generation_id and everything else to
         provider_response_id.
@@ -227,6 +244,24 @@ class OpenAICompatAdapter(ProviderAdapter):
                 "prompt_",
             )
         )
+        unmapped = collect_unmapped(
+            raw,
+            _MAPPED_USAGE_KEYS,
+            (
+                (
+                    "completion_tokens_details",
+                    _COMPLETION_DETAIL_KEYS,
+                    "completion_",
+                ),
+                (
+                    "prompt_tokens_details",
+                    _PROMPT_DETAIL_KEYS,
+                    "prompt_",
+                ),
+            ),
+        )
+        if unmapped:
+            usage["unmapped"] = unmapped
         upstream = getattr(
             response,
             "provider",
