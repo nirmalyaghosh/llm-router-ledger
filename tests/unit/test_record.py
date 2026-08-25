@@ -60,6 +60,7 @@ class _Request:
     """
 
     parts: list[_Part]
+    instructions: str | None = None
     kind: str = "request"
 
 
@@ -593,3 +594,105 @@ def test_record_run_ignores_messages_it_does_not_understand(
         tracker.close()
 
     assert not tmp_log_path.read_text(encoding="utf-8").strip()
+
+
+def test_record_run_records_instructions_as_the_system_prompt(
+    tmp_log_path: Path,
+) -> None:
+    """
+    An agent given instructions puts them on every request it sends,
+    the tool returns that continue a loop included, so every row
+    carries them.
+    """
+    messages = [
+        _Request(
+            parts=[_Part("user-prompt", "first question")],
+            instructions="You are terse.",
+        ),
+        _Response(
+            parts=[_Part("tool-call")],
+            usage=_Usage(input_tokens=3, output_tokens=2),
+        ),
+        _Request(
+            parts=[_Part("tool-return", "42")],
+            instructions="You are terse.",
+        ),
+        _Response(
+            parts=[_Part("text", "done")],
+            usage=_Usage(input_tokens=5, output_tokens=1),
+        ),
+    ]
+
+    tracker = _tracker(tmp_log_path)
+    try:
+        tracker.record_run(messages)
+    finally:
+        tracker.close()
+
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["system_prompt_preview"] == "You are terse."
+    assert entries[2]["system_prompt_preview"] == "You are terse."
+
+
+def test_record_run_carries_a_system_prompt_to_later_turns(
+    tmp_log_path: Path,
+) -> None:
+    """
+    An agent given a system prompt rather than instructions puts a
+    system prompt part on the first request only, but that request is
+    resent as history on every later call, so the later rows carry it
+    too rather than reading as though the prompt had been dropped.
+    """
+    messages = [
+        _Request(
+            parts=[
+                _Part("system-prompt", "You are terse."),
+                _Part("user-prompt", "first question"),
+            ],
+        ),
+        _Response(
+            parts=[_Part("tool-call")],
+            usage=_Usage(input_tokens=3, output_tokens=2),
+        ),
+        _Request(parts=[_Part("tool-return", "42")]),
+        _Response(
+            parts=[_Part("text", "done")],
+            usage=_Usage(input_tokens=5, output_tokens=1),
+        ),
+    ]
+
+    tracker = _tracker(tmp_log_path)
+    try:
+        tracker.record_run(messages)
+    finally:
+        tracker.close()
+
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["system_prompt_preview"] == "You are terse."
+    assert entries[2]["system_prompt_preview"] == "You are terse."
+
+
+def test_record_run_records_no_system_prompt_when_there_is_none(
+    tmp_log_path: Path,
+) -> None:
+    """
+    A run with neither instructions nor a system prompt records an
+    empty preview, which reads as no system prompt rather than as one
+    withheld.
+    """
+    messages = [
+        _Request(parts=[_Part("user-prompt", "hello")]),
+        _Response(
+            parts=[_Part("text", "hi")],
+            usage=_Usage(input_tokens=1, output_tokens=1),
+        ),
+    ]
+
+    tracker = _tracker(tmp_log_path)
+    try:
+        tracker.record_run(messages)
+    finally:
+        tracker.close()
+
+    entries = _read_jsonl(tmp_log_path)
+    assert entries[0]["system_prompt_preview"] == ""

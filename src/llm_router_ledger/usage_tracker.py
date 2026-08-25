@@ -131,6 +131,33 @@ def _response_text(message: Any) -> str:
     )
 
 
+def _system_prompt(message: Any) -> str:
+    """
+    Helper function used to read the system prompt off one model
+    request, for the request event's preview.
+
+    Two shapes carry it, and both are read. An agent given
+    instructions= puts them on every request, including the tool
+    returns that continue a loop. An agent given system_prompt= puts a
+    system prompt part on the first request only, but that request is
+    resent as history on every later call, so the prompt is on the wire
+    for all of them either way.
+
+    Returns "" for a request carrying neither, which is why the caller
+    treats a result as sticky rather than clearing what it already
+    holds.
+    """
+    instructions = getattr(message, "instructions", None)
+    if isinstance(instructions, str) and instructions:
+        return instructions
+    return "".join(
+        part.content
+        for part in getattr(message, "parts", ())
+        if getattr(part, "part_kind", None) == "system-prompt"
+        and isinstance(getattr(part, "content", None), str)
+    )
+
+
 class UsageTracker:
     """
     Append paired llm_request and llm_response events to a JSONL log.
@@ -711,11 +738,15 @@ class UsageTracker:
           documented method regardless.
         """
         request_ids: list[str] = []
+        system_prompt = ""
         user_prompt = ""
         for message in messages:
             kind = getattr(message, "kind", None)
             if kind == "request":
                 user_prompt = _latest_user_prompt(message)
+                system_prompt = (
+                    _system_prompt(message) or system_prompt
+                )
                 continue
             if kind != "response":
                 continue
@@ -729,6 +760,7 @@ class UsageTracker:
                 model=model,
                 provider=stamped_provider,
                 purpose=purpose,
+                system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 metadata=metadata,
             )
