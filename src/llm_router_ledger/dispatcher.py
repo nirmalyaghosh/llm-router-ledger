@@ -13,6 +13,7 @@ import copy
 
 from typing import Any
 
+from llm_router_ledger._errors import wrap_provider_exception
 from llm_router_ledger._messages import (
     build_messages,
     extract_system_text,
@@ -212,8 +213,10 @@ def _split_usage(
 
     The split is by token key rather than by a list of known extras, so a
     value a provider starts returning later lands in usage_details on its
-    own instead of being silently dropped. Modality-agnostic: the same
-    function serves both entry points.
+    own instead of being silently dropped. The adapters uphold the same
+    rule upstream: a usage key they have no mapping for is collected
+    under usage_details["unmapped"] rather than discarded.
+    Modality-agnostic: the same function serves both entry points.
     """
     tokens = {
         key: value
@@ -298,14 +301,34 @@ def create_embeddings(
             metadata=metadata,
         )
 
-    vectors, usage, generation_id = adapter.embed(
-        client=client,
-        model=model,
-        texts=texts,
-        expected_dimensions=ep.embedding_dimensions,
-        timeout_seconds=timeout_seconds,
-        extra_body=effective_extra_body,
-    )
+    try:
+        vectors, usage, generation_id = adapter.embed(
+            client=client,
+            model=model,
+            texts=texts,
+            expected_dimensions=ep.embedding_dimensions,
+            timeout_seconds=timeout_seconds,
+            extra_body=effective_extra_body,
+        )
+    except Exception as exc:
+        wrapped = wrap_provider_exception(exc, endpoint_name)
+        if tracker is not None:
+            tracker.log_error(
+                request_id=request_id,
+                model=model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                status_code=getattr(
+                    wrapped, "status_code", None
+                ),
+                purpose=purpose,
+                provider=ep.provider,
+                modality="embedding",
+                metadata=metadata,
+            )
+        if wrapped is exc:
+            raise
+        raise wrapped from exc
 
     if tracker is not None:
         token_usage, usage_details = (
@@ -442,17 +465,36 @@ def send_message(
             metadata=metadata,
         )
 
-    text, usage, generation_id = adapter.send(
-        client=client,
-        model=model,
-        messages=effective_messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        timeout_seconds=timeout_seconds,
-        user_id=user_id,
-        extra_body=effective_extra_body,
-        response_format=response_format,
-    )
+    try:
+        text, usage, generation_id = adapter.send(
+            client=client,
+            model=model,
+            messages=effective_messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            user_id=user_id,
+            extra_body=effective_extra_body,
+            response_format=response_format,
+        )
+    except Exception as exc:
+        wrapped = wrap_provider_exception(exc, endpoint_name)
+        if tracker is not None:
+            tracker.log_error(
+                request_id=request_id,
+                model=model,
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                status_code=getattr(
+                    wrapped, "status_code", None
+                ),
+                purpose=purpose,
+                provider=ep.provider,
+                metadata=metadata,
+            )
+        if wrapped is exc:
+            raise
+        raise wrapped from exc
 
     if tracker is not None:
         token_usage, usage_details = (

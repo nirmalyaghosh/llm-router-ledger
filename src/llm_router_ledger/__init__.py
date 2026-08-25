@@ -34,11 +34,15 @@ from llm_router_ledger.dispatcher import (
     send_message,
 )
 from llm_router_ledger.exceptions import (
+    AuthenticationError,
     ConfigError,
     EndpointNotFoundError,
+    InsufficientBalanceError,
     LLMCallError,
     MissingApiKeyError,
     ProviderError,
+    ProviderUnavailableError,
+    RateLimitedError,
     UsageTrackerError,
 )
 from llm_router_ledger.results import (
@@ -58,6 +62,7 @@ except PackageNotFoundError:
 
 __all__ = [
     "ChatResult",
+    "AuthenticationError",
     "ConfigError",
     "CostConfig",
     "DefaultsConfig",
@@ -66,8 +71,11 @@ __all__ = [
     "EndpointNotFoundError",
     "LLMCallError",
     "LLMConfig",
+    "InsufficientBalanceError",
     "MissingApiKeyError",
     "ProviderError",
+    "ProviderUnavailableError",
+    "RateLimitedError",
     "ProviderName",
     "UsageTracker",
     "UsageTrackerError",

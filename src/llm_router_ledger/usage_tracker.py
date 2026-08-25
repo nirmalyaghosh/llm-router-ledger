@@ -308,6 +308,65 @@ class UsageTracker:
         self._write_entry(entry)
         return request_id
 
+    def log_error(
+        self,
+        *,
+        request_id: str,
+        model: str,
+        error_type: str,
+        error_message: str,
+        status_code: int | None = None,
+        purpose: str | None = None,
+        provider: str = "",
+        modality: str = "text",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Write an llm_error event for a call that raised.
+
+        Shares request_id with the llm_request that preceded it, so a
+        failure pairs the same way a success does and no request is left
+        orphaned. A third event type rather than an llm_response with an
+        error field: a failed call produced no tokens, and writing zeroes
+        into usage would corrupt anyone summing them.
+
+        error_type is the original exception's class name, kept because
+        the wrapped class the caller sees is coarser than what the SDK
+        raised. status_code is the provider's HTTP status where there was
+        one, and is omitted for transport failures.
+
+        The SDK retries internally before raising, so one llm_error
+        stands for however many attempts it made.
+        """
+        entry: dict[str, Any] = {
+            "event": "llm_error",
+            "project_id": self._project_id,
+            "purpose": (
+                purpose
+                if purpose is not None
+                else self._default_purpose
+            ),
+            "request_id": request_id,
+            "run_tag": self._run_tag,
+            "run_label": self._run_label,
+            "timestamp": (
+                datetime.now(timezone.utc)
+                .isoformat()
+            ),
+            "model": model,
+            "error_type": error_type,
+            "error_message": error_message,
+        }
+        if status_code is not None:
+            entry["status_code"] = status_code
+        if provider:
+            entry["provider"] = provider
+        if modality != "text":
+            entry["modality"] = modality
+        if metadata:
+            entry["metadata"] = metadata
+        self._write_entry(entry)
+
     def log_response(
         self,
         *,
