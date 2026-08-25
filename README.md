@@ -304,6 +304,8 @@ Chat calls map provider fields onto ledger keys as follows. A key is written onl
 | other keys in either `*_tokens_details` block | same name, `completion_` / `prompt_` prefixed | varies |
 | anything else the provider reports | `usage_details.unmapped.<key>` | see below |
 
+`usage_details.completion_reasoning_tokens` and `usage_details.prompt_cached_tokens` are subsets of `usage.completion_tokens` and `usage.prompt_tokens`, not additions to them, so adding either to its parent double-counts. Verified against three paid OpenRouter endpoints: the reported `cost` matched the inclusive reading to the cent, while the additive reading overstated it by 21 to 58 percent.
+
 Two keys are derived rather than reported: `completion_tool_call_count`, the number of tool calls on a turn that made any, and `finish_reason`, written only when the turn ended abnormally (e.g. `length`, truncated at `max_tokens`) in the provider's own vocabulary. A tool-call turn has no text, so it records `response_length` 0; the count is what distinguishes it from a model that answered with nothing.
 
 `usage_details.unmapped` holds provider fields the library has no mapping for, so nothing a provider reports is silently discarded. Observed examples: DeepSeek's `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`, which duplicate `prompt_cached_tokens`; Qwen's `completion_text_tokens` and `prompt_text_tokens`; Azure's `latency_checkpoint` timing block; Anthropic's `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation`, `service_tier` and `inference_geo`. OpenAI reports nothing unmapped.
