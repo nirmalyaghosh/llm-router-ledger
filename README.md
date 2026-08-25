@@ -192,6 +192,28 @@ tracker.subscribe(lambda entry: my_container.upsert_item(entry))
 - Each subscriber receives its own copy of the entry.
 - Callbacks are synchronous and run on the calling thread, so a slow one delays every call. Queue the work inside the callback if the destination is remote.
 
+## Setting a purpose an agent cannot pass
+
+`send_message()` takes `purpose` per call, but by the time a framework's
+request reaches the ledger there is no argument left to carry it. Set it
+around the work instead:
+
+```python
+from llm_router_ledger import purpose_scope
+
+with purpose_scope("query-planning"):
+    result = await agent.run("...")
+```
+
+- The scope is a context variable, so it is per-task and per-thread: two
+  agents running concurrently under asyncio each keep their own purpose.
+- Scopes nest and the innermost wins. Entering a scope with `""` is how
+  a nested call records with no purpose rather than inheriting the one
+  around it.
+- A `purpose` passed to the call wins over the scope, and the scope wins
+  over `UsageTracker(default_purpose=...)`. The narrowest thing that was
+  actually set is what reaches the ledger.
+
 ## JSONL ledger schema
 
 - `UsageTracker` writes two events per `send_message()` or `create_embeddings()` call: an `llm_request` before the call, and an `llm_response` after.

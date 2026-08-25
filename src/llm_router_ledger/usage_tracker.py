@@ -18,7 +18,10 @@ import json
 import os
 import uuid
 
-from collections.abc import Callable
+from collections.abc import (
+    Callable,
+    Iterable,
+)
 from datetime import (
     datetime,
     timezone,
@@ -29,6 +32,7 @@ from typing import Any
 
 from llm_router_ledger._logger import get_logger
 from llm_router_ledger.exceptions import UsageTrackerError
+from llm_router_ledger.purpose import current_purpose
 
 
 logger = get_logger(__name__)
@@ -207,6 +211,31 @@ class UsageTracker:
                 encoding="utf-8",
             )
 
+    def _resolve_purpose(
+        self,
+        purpose: str | None,
+    ) -> str:
+        """
+        Helper function used to pick the purpose for one entry.
+
+        A purpose passed to the call wins; failing that the ambient
+        purpose_scope, if one is active; failing that the tracker's
+        default_purpose. The narrowest thing that was actually set is
+        what reaches the ledger.
+
+        An empty string counts as unset rather than as an explicit
+        override, because send_message defaults its purpose argument to
+        "" and passes it through on every call. Treating it as an
+        override would mean no call routed through the dispatcher could
+        ever see the scope or the default.
+        """
+        if purpose:
+            return purpose
+        scoped = current_purpose()
+        if scoped:
+            return scoped
+        return self._default_purpose
+
     def _write_entry(self, entry: dict[str, Any]) -> None:
         """
         Helper function used to serialise a single dict to JSON and
@@ -276,10 +305,8 @@ class UsageTracker:
         entry: dict[str, Any] = {
             "event": "llm_request",
             "project_id": self._project_id,
-            "purpose": (
-                purpose
-                if purpose is not None
-                else self._default_purpose
+            "purpose": self._resolve_purpose(
+                purpose,
             ),
             "request_id": request_id,
             "run_tag": self._run_tag,
@@ -341,10 +368,8 @@ class UsageTracker:
         entry: dict[str, Any] = {
             "event": "llm_error",
             "project_id": self._project_id,
-            "purpose": (
-                purpose
-                if purpose is not None
-                else self._default_purpose
+            "purpose": self._resolve_purpose(
+                purpose,
             ),
             "request_id": request_id,
             "run_tag": self._run_tag,
@@ -417,10 +442,8 @@ class UsageTracker:
         entry: dict[str, Any] = {
             "event": "llm_response",
             "project_id": self._project_id,
-            "purpose": (
-                purpose
-                if purpose is not None
-                else self._default_purpose
+            "purpose": self._resolve_purpose(
+                purpose,
             ),
             "request_id": request_id,
             "run_tag": self._run_tag,

@@ -7,6 +7,7 @@ Public surface:
 - create_embeddings: vector embeddings entry point, returns an
   EmbeddingResult.
 - UsageTracker: append-only JSONL logger.
+- purpose_scope: set the purpose an agent framework cannot pass.
 - load_config, LLMConfig: YAML config + types.
 - Exceptions rooted at LLMCallError.
 """
@@ -45,6 +46,10 @@ from llm_router_ledger.exceptions import (
     RateLimitedError,
     UsageTrackerError,
 )
+from llm_router_ledger.purpose import (
+    current_purpose,
+    purpose_scope,
+)
 from llm_router_ledger.results import (
     ChatResult,
     EmbeddingResult,
@@ -81,9 +86,11 @@ __all__ = [
     "UsageTrackerError",
     "__version__",
     "create_embeddings",
+    "current_purpose",
     "get_client",
     "get_context_window",
     "get_model_name",
     "load_config",
+    "purpose_scope",
     "send_message",
 ]
