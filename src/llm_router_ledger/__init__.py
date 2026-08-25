@@ -6,7 +6,8 @@ Public surface:
 - send_message: primary entry point, returns a ChatResult.
 - create_embeddings: vector embeddings entry point, returns an
   EmbeddingResult.
-- UsageTracker: append-only JSONL logger.
+- UsageTracker: append-only JSONL logger, with record_request,
+  record_response, and record_run for calls the library did not make.
 - purpose_scope: set the purpose an agent framework cannot pass.
 - load_config, LLMConfig: YAML config + types.
 - Exceptions rooted at LLMCallError.

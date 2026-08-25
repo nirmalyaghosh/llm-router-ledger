@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added: `purpose_scope()` and `current_purpose()`, setting the purpose around work an agent framework cannot pass one to; a context variable, so concurrent tasks keep their own.
+- Added: `UsageTracker.record_request()` / `record_response()`, recording a call this library did not make as the same paired events `send_message()` writes; `record_response()` takes the provider's usage mapping as reported and splits it, accepting Anthropic's `input_tokens` / `output_tokens` names as readily as `prompt_tokens` / `completion_tokens` and deriving `total_tokens` when the provider omits it. `UsageTracker.record_run()`, recording every model call in a finished Pydantic AI run as one pair each, reading the messages by duck typing so the core package gains no pydantic-ai dependency. `purpose_scope()` and `current_purpose()`, setting the purpose around work an agent framework cannot pass one to; a context variable, so concurrent tasks keep their own.
 - Changed: `UsageTracker(default_purpose=...)` now reaches the ledger for calls routed through `send_message()` / `create_embeddings()`, which pass `purpose=""` on every call. An empty `purpose` counts as unset, so it falls back to the scope and then the default.
 
 ## [0.2.0] - 2026-08-25

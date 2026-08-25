@@ -31,6 +31,12 @@ from pathlib import Path
 from typing import Any
 
 from llm_router_ledger._logger import get_logger
+from llm_router_ledger._usage import (
+    ORDINARY_FINISH_REASONS,
+    map_request_usage,
+    normalise_token_keys,
+    split_usage,
+)
 from llm_router_ledger.exceptions import UsageTrackerError
 from llm_router_ledger.purpose import current_purpose
 
@@ -39,6 +45,90 @@ logger = get_logger(__name__)
 
 
 Subscriber = Callable[[dict[str, Any]], None]
+
+
+def _count_tool_calls(message: Any) -> int:
+    """
+    Helper function used to count the tool calls in one model response,
+    so a turn that returned only tool calls does not read as an empty
+    response in the ledger. Mirrors completion_tool_call_count as the
+    OpenAI-compatible adapter writes it.
+
+    Counts the ordinary tool call part only. A framework's own
+    provider-side call parts, e.g. a hosted web search, carry their own
+    discriminators and are not counted, so this is a floor rather than
+    an exact total for a run that uses them.
+    """
+    return sum(
+        1
+        for part in getattr(message, "parts", ())
+        if getattr(part, "part_kind", None) == "tool-call"
+    )
+
+
+def _finish_reason(message: Any) -> str:
+    """
+    Helper function used to read the finish reason off one model
+    response, in the provider's own vocabulary, or "" for a turn that
+    ran to completion.
+
+    The provider's word for it is preferred over the framework's
+    normalised one, because both adapters record the raw value and a
+    reconciler filtering on finish_reason must not have to know that
+    the same truncated turn is "tool_calls" from one path and
+    "tool_call" from the other. Pydantic AI keeps the raw value in
+    provider_details and exposes the normalised one on the message, so
+    the raw value is there to be preferred.
+    """
+    details = getattr(message, "provider_details", None)
+    raw = (
+        details.get("finish_reason")
+        if isinstance(details, dict)
+        else None
+    )
+    reason = raw or getattr(message, "finish_reason", None)
+    if not reason or reason in ORDINARY_FINISH_REASONS:
+        return ""
+    return str(reason)
+
+
+def _latest_user_prompt(message: Any) -> str:
+    """
+    Helper function used to pull the last user prompt out of one model
+    request, for the request event's preview and character count. Tool
+    returns and system prompts are skipped: the dispatcher previews the
+    latest user message, and this follows it.
+
+    Returns "" for a request carrying no user prompt, e.g. the tool
+    return that continues a tool loop, and for a multimodal prompt
+    whose content is not a plain string.
+    """
+    latest = ""
+    for part in getattr(message, "parts", ()):
+        if getattr(part, "part_kind", None) != "user-prompt":
+            continue
+        content = getattr(part, "content", "")
+        if isinstance(content, str):
+            latest = content
+    return latest
+
+
+def _response_text(message: Any) -> str:
+    """
+    Helper function used to join the text parts of one model response,
+    for the response event's preview and character count.
+
+    Thinking parts are excluded: they are not the answer, and their
+    tokens are already accounted for under
+    completion_reasoning_tokens. A turn that returned only tool calls
+    yields "", the same as the adapter records for it.
+    """
+    return "".join(
+        part.content
+        for part in getattr(message, "parts", ())
+        if getattr(part, "part_kind", None) == "text"
+        and isinstance(getattr(part, "content", None), str)
+    )
 
 
 class UsageTracker:
@@ -479,6 +569,200 @@ class UsageTracker:
         if metadata:
             entry["metadata"] = metadata
         self._write_entry(entry)
+
+    def record_request(
+        self,
+        *,
+        model: str,
+        provider: str = "",
+        purpose: str | None = None,
+        system_prompt: str = "",
+        user_prompt: str = "",
+        modality: str = "text",
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Write an llm_request event for a call this library did not make
+        itself, and return the request_id to pair a response with.
+
+        Use this when an agent framework, a raw SDK call, or anything
+        else owns the call path and the ledger still has to account for
+        the tokens. The event is the one log_request writes, so a
+        recorded call and a send_message call are the same row shape
+        and reconcile the same way.
+
+        system_prompt and user_prompt are optional, since a caller
+        recording someone else's call may not have them. Leaving them
+        empty records an empty preview and a zero length, which reads
+        as "no text was supplied" rather than as an empty prompt.
+
+        A call that fails leaves this request unpaired, exactly as it
+        does for send_message.
+        """
+        return self.log_request(
+            model=model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            purpose=purpose,
+            provider=provider,
+            modality=modality,
+            metadata=metadata,
+        )
+
+    def record_response(
+        self,
+        *,
+        request_id: str,
+        model: str,
+        usage: dict[str, Any] | None = None,
+        response_id: str = "",
+        response_text: str = "",
+        provider: str = "",
+        purpose: str | None = None,
+        modality: str = "text",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Write the llm_response event pairing a record_request call.
+
+        usage is the provider's usage mapping as reported, not a
+        pre-split one: the three token keys are lifted into the usage
+        block and everything else is written under usage_details, the
+        same split send_message performs. Pass None for a call that
+        reported no usage at all; the token keys are then written as
+        zero, which is what an absent usage block already produces.
+
+        A mapping reporting input_tokens and output_tokens, as
+        Anthropic does, is accepted as readily as one reporting
+        prompt_tokens and completion_tokens, and total_tokens is filled
+        in when the provider omitted it.
+
+        response_id is routed the way log_response routes it: an id
+        prefixed "gen-" lands in generation_id, anything else in
+        provider_response_id.
+        """
+        token_usage, usage_details = split_usage(
+            normalise_token_keys(usage or {}),
+        )
+        self.log_response(
+            request_id=request_id,
+            model=model,
+            response_text=response_text,
+            usage=token_usage,
+            generation_id=response_id,
+            purpose=purpose,
+            provider=provider,
+            modality=modality,
+            usage_details=usage_details,
+            metadata=metadata,
+        )
+
+    def record_run(
+        self,
+        messages: Iterable[Any],
+        *,
+        purpose: str | None = None,
+        provider: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> list[str]:
+        """
+        Record every model call in a finished Pydantic AI run, and
+        return the request_ids written, in order.
+
+        Pass the run's message list:
+
+            result = await agent.run("...")
+            tracker.record_run(
+                result.all_messages(),
+                purpose="query-planning",
+            )
+
+        Each model response in the list carries its own usage, model
+        name and response id, so one request and response pair is
+        written per model call. A run that called a tool three times
+        produces three pairs, not one.
+
+        The messages are read by duck typing rather than by importing
+        pydantic-ai, so recording a run costs the core package no
+        dependency.
+
+        provider overrides the provider name stamped on the rows. Pass
+        the endpoint's provider from llm_endpoints.yaml: the name on
+        the message is the framework's own provider id, which is
+        "openai" for every OpenAI-compatible server, so an unoverridden
+        row cannot tell an OpenAI call from a local one.
+
+        Two limits are worth knowing before reconciling against these
+        rows:
+
+        - A finished message list carries no record of why each call
+          was made, so one purpose is stamped across the whole run and
+          retries within it inherit it.
+        - A run that raises produces no rows at all, unlike
+          send_message, which logs the request before making the call.
+          Both are correct, but it changes what an unpaired llm_request
+          means: from this method it means the process died mid-write,
+          not that a call failed.
+        - A provider's own reported cost does not survive the trip. The
+          framework keeps only integer usage fields, so a reported cost
+          never reaches these rows and usage_details carries the
+          locally computed estimated_cost instead. Reconcile these rows
+          against the provider's export by response id, which is the
+          documented method regardless.
+        """
+        request_ids: list[str] = []
+        user_prompt = ""
+        for message in messages:
+            kind = getattr(message, "kind", None)
+            if kind == "request":
+                user_prompt = _latest_user_prompt(message)
+                continue
+            if kind != "response":
+                continue
+            model = getattr(message, "model_name", "") or ""
+            stamped_provider = (
+                provider
+                or getattr(message, "provider_name", "")
+                or ""
+            )
+            request_id = self.record_request(
+                model=model,
+                provider=stamped_provider,
+                purpose=purpose,
+                user_prompt=user_prompt,
+                metadata=metadata,
+            )
+            usage = map_request_usage(
+                getattr(message, "usage", None),
+            )
+            finish_reason = _finish_reason(message)
+            if finish_reason:
+                usage["finish_reason"] = finish_reason
+            tool_calls = _count_tool_calls(message)
+            if tool_calls:
+                usage["completion_tool_call_count"] = (
+                    tool_calls
+                )
+            self.record_response(
+                request_id=request_id,
+                model=model,
+                usage=usage,
+                response_id=(
+                    getattr(
+                        message,
+                        "provider_response_id",
+                        "",
+                    )
+                    or ""
+                ),
+                response_text=_response_text(message),
+                provider=stamped_provider,
+                purpose=purpose,
+                metadata=metadata,
+            )
+            request_ids.append(request_id)
+            user_prompt = ""
+        return request_ids
 
     def start_run(self) -> str:
         """

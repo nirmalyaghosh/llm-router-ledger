@@ -192,6 +192,72 @@ tracker.subscribe(lambda entry: my_container.upsert_item(entry))
 - Each subscriber receives its own copy of the entry.
 - Callbacks are synchronous and run on the calling thread, so a slow one delays every call. Queue the work inside the callback if the destination is remote.
 
+## Recording calls this library did not make
+
+An agent framework owns its own call path, so `send_message()` never
+runs and the ledger never sees the tokens. `UsageTracker` records those
+calls too, producing the same two events, with the same keys, that a
+call through this library produces.
+
+Record a call directly:
+
+```python
+request_id = tracker.record_request(
+    model="xiaomi/mimo-v2.5",
+    provider="openrouter",
+    purpose="query-planning",
+)
+# ... something else makes the call ...
+tracker.record_response(
+    request_id=request_id,
+    model="xiaomi/mimo-v2.5",
+    usage=raw_usage,
+    response_id=response.id,
+    provider="openrouter",
+)
+```
+
+`usage` is the provider's usage mapping as reported. The three token
+keys are lifted into the `usage` block and everything else is written
+under `usage_details`, the same split `send_message()` performs.
+`response_id` is routed the same way too: an id prefixed `gen-` lands in
+`generation_id`, anything else in `provider_response_id`.
+
+Or record a whole [Pydantic AI](https://ai.pydantic.dev) run at once:
+
+```python
+result = await agent.run("...")
+tracker.record_run(
+    result.all_messages(),
+    purpose="query-planning",
+    provider="openrouter",
+)
+```
+
+One request and response pair is written per model call, so a run that
+called a tool three times produces three pairs. The messages are read by
+duck typing, so this costs no dependency on pydantic-ai.
+
+- Pass `provider`. The provider name on the message is the framework's
+  own, and is `openai` for every OpenAI-compatible server, so without it
+  a local call is filed as an OpenAI one.
+- Pydantic AI's usage fields are translated to the names the adapters
+  already write, so rows from both sources join on one vocabulary. That
+  includes `finish_reason`, recorded in the provider's own words rather
+  than the framework's normalised ones.
+- `RequestUsage.cost` is recorded as `usage_details.estimated_cost`,
+  never as `cost`: it is computed from a local price table rather than
+  reported by the provider, and `cost` is reserved for what the provider
+  said it billed. A provider's own reported cost does not survive the
+  trip at all, since the framework keeps only integer usage fields, so
+  reconcile these rows against the provider's export by response id.
+- A finished message list carries no record of why each call was made,
+  so one `purpose` is stamped across the whole run and retries within it
+  inherit it. Use a purpose scope where per-call purpose matters.
+- A run that raises produces no rows at all, unlike `send_message()`,
+  which logs the request before making the call. Both are correct, but
+  it changes what an unpaired `llm_request` means.
+
 ## Setting a purpose an agent cannot pass
 
 `send_message()` takes `purpose` per call, but by the time a framework's
@@ -203,6 +269,7 @@ from llm_router_ledger import purpose_scope
 
 with purpose_scope("query-planning"):
     result = await agent.run("...")
+    tracker.record_run(result.all_messages())
 ```
 
 - The scope is a context variable, so it is per-task and per-thread: two
