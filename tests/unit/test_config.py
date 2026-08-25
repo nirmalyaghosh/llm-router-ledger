@@ -20,6 +20,17 @@ from llm_router_ledger.exceptions import (
     MissingApiKeyError,
 )
 
+# An OpenRouter ":free" variant, whose colon sits at the end of the
+# model string rather than in front of a provider prefix.
+_FREE_VARIANT_YAML = """endpoints:
+  free-model:
+    provider: openrouter
+    model: nvidia/nemotron-3.5-lightning:free
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 1000000
+"""
+
 
 def test_cost_days_since_checked_none() -> None:
     """
@@ -267,6 +278,45 @@ def test_get_context_window_finds_match(sample_yaml_file: Path) -> None:
     config = load_config(sample_yaml_file)
     actual = get_context_window(model="llama3.1", config=config)
     assert actual == 8192
+
+
+def test_get_context_window_matches_free_variant(
+    tmp_path: Path,
+) -> None:
+    """
+    An OpenRouter ":free" model string matches its own endpoint. Reading
+    the colon as a provider prefix would leave "free" as the bare name,
+    which matches nothing and silently returns the default.
+    """
+    path = tmp_path / "llm_endpoints.yaml"
+    path.write_text(_FREE_VARIANT_YAML, encoding="utf-8")
+    config = load_config(path)
+    actual = get_context_window(
+        model="nvidia/nemotron-3.5-lightning:free",
+        config=config,
+    )
+    assert actual == 1000000
+
+
+def test_get_context_window_strips_prefix_from_free_variant(
+    tmp_path: Path,
+) -> None:
+    """
+    A provider prefix is still stripped when the remainder is itself a
+    ":free" variant, so both spellings resolve to the same endpoint.
+
+    This spelling was never broken: splitting on the first colon
+    already left the ":free" tail intact. The test guards the prefix
+    path now that it runs through a candidate loop.
+    """
+    path = tmp_path / "llm_endpoints.yaml"
+    path.write_text(_FREE_VARIANT_YAML, encoding="utf-8")
+    config = load_config(path)
+    actual = get_context_window(
+        model="openrouter:nvidia/nemotron-3.5-lightning:free",
+        config=config,
+    )
+    assert actual == 1000000
 
 
 def test_get_context_window_strips_provider_prefix(

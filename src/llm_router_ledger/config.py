@@ -35,10 +35,13 @@ from pydantic import (
     Field,
 )
 
+from llm_router_ledger._logger import get_logger
 from llm_router_ledger.exceptions import (
     ConfigError,
     MissingApiKeyError,
 )
+
+logger = get_logger(__name__)
 
 load_dotenv()
 
@@ -260,7 +263,16 @@ class LLMConfig(BaseModel):
         """
         Resolve role assignment to endpoint configs. Returns list (role
         may map to a list or a single string in YAML).
+
+        Deprecated: removed in 0.3.0, replaced by route groups.
         """
+        logger.warning(
+            "get_role_endpoints() and the `roles` config block are"
+            " deprecated and will be removed in 0.3.0, when route"
+            " groups replace them. Route groups carry a selection"
+            " strategy and stamp the chosen endpoint in the ledger.",
+            stacklevel=2,
+        )
         mapping = self.roles.get(
             project,
             self.roles.get("default", {}),
@@ -290,23 +302,25 @@ def get_context_window(
     """
     Look up context window for a model string.
 
-    Strips a single leading provider prefix so e.g.
-    "openrouter:qwen/qwen3.5-9b" matches an endpoint whose model field is
-    "qwen/qwen3.5-9b". Returns default if no match is found.
+    The string is matched as given first, so an OpenRouter ":free"
+    variant such as "nvidia/nemotron-3.5-lightning:free" resolves to its
+    own endpoint. Only when that misses is a single leading provider
+    prefix stripped, so "openrouter:qwen/qwen3.5-9b" still matches an
+    endpoint whose model field is "qwen/qwen3.5-9b". Returns default if
+    no match is found.
     """
     if config is None:
         config = load_config()
-    bare = (
-        model.split(":", 1)[-1]
-        if ":" in model
-        else model
-    )
-    for ep in config.endpoints.values():
-        if (
-            ep.model == bare
-            and ep.context_window
-        ):
-            return ep.context_window
+    candidates = [model]
+    if ":" in model:
+        candidates.append(model.split(":", 1)[-1])
+    for candidate in candidates:
+        for ep in config.endpoints.values():
+            if (
+                ep.model == candidate
+                and ep.context_window
+            ):
+                return ep.context_window
     return default
 
 

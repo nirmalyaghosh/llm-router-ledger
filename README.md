@@ -10,13 +10,26 @@ request and response for offline cost reconciliation.
 |---|---|---|
 | Supported | direct | Anthropic |
 | Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
-| Supported | via OpenRouter | ByteDance Seed, Xiaomi MiMo |
+| Supported | via OpenRouter | ByteDance Seed, InclusionAI Ling, Nvidia Nemotron, Xiaomi MiMo |
 | Planned | direct | Gemini |
 
-- All "Supported" rows in 0.1.2 are live-smoke-verified end-to-end.
+- Every "Supported" row is live-smoke-verified end-to-end.
 - Anthropic requires the optional `[anthropic]` extra: `uv pip install llm-router-ledger[anthropic]`.
-- For ByteDance Seed and Xiaomi MiMo, use `provider: openrouter` with the appropriate model id.
+- For the "via OpenRouter" families, use `provider: openrouter` with the appropriate model id.
 - The table above is about text. Embeddings are gated separately and verified on OpenRouter, Ollama and LM Studio only; see [Embeddings](#embeddings).
+
+### Free chat models
+
+Verified end-to-end via OpenRouter and configured in `examples/llm_endpoints.example.yaml`. Rates are USD per 1M tokens. Both endpoints declare an explicit `0.00` rather than omitting `cost`, so the ledger records their tokens the same way it does a paid endpoint.
+
+| Model | In | Out | Context |
+|---|---|---|---|
+| `nvidia/nemotron-3.5-content-safety:free` | 0.00 | 0.00 | 128000 |
+| `nvidia/nemotron-3.5-lightning:free` | 0.00 | 0.00 | 1000000 |
+
+Free models share their capacity with everyone else using them, so a call fails with HTTP 429 when they are busy. One of the two above failed nine times in a row during verification.
+
+`nvidia/nemotron-3.5-content-safety:free` is a safety classifier, not a general chat model. It answers every prompt with a verdict, so `What is 17 * 23?` returns `User Safety: safe`.
 
 ## Install
 
@@ -185,10 +198,28 @@ tracker.subscribe(lambda entry: my_container.upsert_item(entry))
 - Both share a `request_id` so they can be paired. Top-level fields on each event include `project_id`, `provider`, `model`, `purpose`, `run_tag`, `run_label`, and `timestamp`.
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
 - Previews are redacted by default: `system_prompt_preview`, `user_prompt_preview`, and `response_preview` are written as `"[REDACTED]"` when the underlying text is non-empty, `""` when it genuinely is empty. Pass `preview_length` (a positive character count) to `UsageTracker()` to opt in to storing a truncated preview instead; the length and token counts are always recorded either way.
-- A failed call leaves an `llm_request` with no matching `llm_response`, because the request is logged before the call is made. Readers should expect unpaired requests.
+- A failed call writes an `llm_error` event sharing the `request_id` of its `llm_request`, carrying `error_type` (the original SDK exception's class name), `error_message`, and `status_code` where the provider returned one. A third event type rather than an `llm_response` with an error field, because a failed call has no tokens and writing zeroes would corrupt anyone summing them. The SDK retries internally before raising, so one `llm_error` stands for however many attempts it made.
 - `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
-  - **Chat calls** (OpenAI-compatible providers): `cost`, `is_byok`, and `upstream_provider` where available, plus the flattened contents of `completion_tokens_details` / `prompt_tokens_details` under a `completion_` / `prompt_` prefix (e.g. `completion_reasoning_tokens`, `prompt_cached_tokens`), plus `completion_tool_call_count` on a turn that returned tool calls. A tool-call turn has no text, so it records `response_length` 0; the count is what distinguishes it from a model that answered with nothing. `finish_reason` is written only when the turn ended abnormally (e.g. `length`, truncated at `max_tokens`), in the provider's own vocabulary; the ordinary values (`stop`, Anthropic's `end_turn`) are omitted. The Anthropic adapter reports none of the cost or detail keys, so Anthropic rows carry no `usage_details` on an ordinary call.
   - **Embedding calls**: `dimensions` and `embedding_count` always, plus `cost`, `is_byok` and `upstream_provider` where available.
+
+Chat calls map provider fields onto ledger keys as follows. A key is written only when the provider reports a non-zero value for it.
+
+| Provider reports | Ledger key | Observed on |
+|---|---|---|
+| `usage.prompt_tokens` / `completion_tokens` / `total_tokens` | `usage.*`, unchanged | all |
+| Anthropic `usage.input_tokens` / `output_tokens` | `usage.prompt_tokens` / `completion_tokens` | Anthropic |
+| `usage.cost`, `usage.is_byok` | `usage_details.cost`, `.is_byok` | OpenRouter |
+| response `provider` | `usage_details.upstream_provider` | OpenRouter |
+| `completion_tokens_details.reasoning_tokens` | `usage_details.completion_reasoning_tokens` | OpenRouter, Qwen, Zhipu |
+| `prompt_tokens_details.cached_tokens` | `usage_details.prompt_cached_tokens` | OpenRouter, DeepSeek, Zhipu |
+| other keys in either `*_tokens_details` block | same name, `completion_` / `prompt_` prefixed | varies |
+| anything else the provider reports | `usage_details.unmapped.<key>` | see below |
+
+Two keys are derived rather than reported: `completion_tool_call_count`, the number of tool calls on a turn that made any, and `finish_reason`, written only when the turn ended abnormally (e.g. `length`, truncated at `max_tokens`) in the provider's own vocabulary. A tool-call turn has no text, so it records `response_length` 0; the count is what distinguishes it from a model that answered with nothing.
+
+`usage_details.unmapped` holds provider fields the library has no mapping for, so nothing a provider reports is silently discarded. Observed examples: DeepSeek's `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens`, which duplicate `prompt_cached_tokens`; Qwen's `completion_text_tokens` and `prompt_text_tokens`; Azure's `latency_checkpoint` timing block; Anthropic's `cache_read_input_tokens`, `cache_creation_input_tokens`, `cache_creation`, `service_tier` and `inference_geo`. OpenAI reports nothing unmapped.
+
+Treat `unmapped` as unstable. A key that later gains an explicit mapping moves out of `unmapped` and up a level, so read from it defensively.
 
 **Embedding calls** additionally set `modality: "embedding"` on both events. The key is omitted entirely on text calls, so existing rows are unchanged and an absent `modality` means text. The response preview is empty and `response_length` is 0 for embeddings, since an embedding response carries no text. Neither the input text in full nor the vectors are ever written to the ledger.
 

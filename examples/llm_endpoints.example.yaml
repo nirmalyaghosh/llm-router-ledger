@@ -2,6 +2,24 @@
 #
 # Most providers below route through the shared OpenAI-compatible adapter.
 # `provider: anthropic` uses the native Anthropic Messages API adapter.
+# 
+# About OpenAI models:
+# The same model may appear under several endpoint names, one per
+# route. gpt-4.1-nano is configured three ways below, as
+# azure-gpt-4.1-nano, openai-gpt-4.1-nano and openrouter-gpt-4.1-nano.
+# All three share the OpenAI-compatible adapter but differ in
+# credential, base_url and billing party, and the `model` field takes a
+# different form in each: an Azure deployment name, an OpenAI model id,
+# and an OpenRouter author/slug pair. Ledger rows carry both endpoint
+# and provider, so the routes reconcile independently.
+#
+# Several free and low-cost OpenRouter chat models are included, each
+# smoke-verified end-to-end. Two caveats apply. Free models share their
+# capacity with everyone else using them, so a call fails with HTTP 429
+# when they are busy. A declared
+# rate describes one upstream out of many, and the spread exceeds 12x
+# on input and 20x on output for a single slug, so reconcile against
+# the reported cost field rather than the block below.
 
 defaults:
   timeout_seconds: 60
@@ -9,17 +27,23 @@ defaults:
   retry_backoff_factor: 2.0
 
 endpoints:
+  # Anthropic direct (native Messages API).
+  anthropic-claude-haiku:
+    provider: anthropic
+    model: claude-haiku-4-5
+    api_key_env: ANTHROPIC_API_KEY
+
   # Azure OpenAI v1
   # The `model` field is the Azure deployment name, not a model name.
   # Replace <your-resource-name> with your actual Azure resource.
+  # One of three configured routes to gpt-4.1-nano. See the file header.
   azure-gpt-4.1-nano:
     provider: azure
     model: gpt-4.1-nano  # Refer to the Azure deployment name
     api_key_env: AZURE_OPENAI_API_KEY
     base_url: https://<your-resource-name>.openai.azure.com/openai/v1/
 
-  # DeepSeek direct API. Cheaper than via the
-  # aggregator; requires a DeepSeek account.
+  # DeepSeek direct.
   deepseek-direct:
     provider: deepseek
     model: deepseek-chat
@@ -97,13 +121,11 @@ endpoints:
   # than send_message(). Pull the model first:
   #   ollama pull qwen3-embedding:0.6b
   #
-  # Nothing is billed, but cost is still declared at 0.00 so the
-  # endpoint has the same shape as a hosted one and the ledger records
-  # tokens either way, keeping local and hosted runs comparable.
+  # cost is declared at 0.00 rather than omitted so the entry has the
+  # same shape as a hosted one and the ledger records tokens for both.
   #
-  # Ollama returns no response id, so ledger rows for this endpoint
-  # carry an empty provider_response_id. There is no invoice to
-  # reconcile against, so nothing is lost.
+  # Ollama returns no response id, so provider_response_id is empty.
+  # Nothing is billed, so there is no invoice to reconcile against.
   ollama-embed-qwen3-0.6b:
     provider: ollama
     model: qwen3-embedding:0.6b
@@ -117,10 +139,14 @@ endpoints:
       pricing_url: https://ollama.com/library/qwen3-embedding
       pricing_checked: "2026-08-01"
       pricing_notes: "Runs locally. No API cost."
-    notes: >
-      Native width is 1024. The model page advertises up to 4096, but
-      that is the Matryoshka range the weights support, not what
-      Ollama returns.
+
+  # OpenAI direct. No base_url needed; the OpenAI SDK defaults to
+  # https://api.openai.com/v1.
+  # One of three configured routes to gpt-4.1-nano. See the file header.
+  openai-gpt-4.1-nano:
+    provider: openai
+    model: gpt-4.1-nano
+    api_key_env: OPENAI_API_KEY
 
   # Qwen direct API (Alibaba Cloud DashScope). International endpoint;
   # use https://dashscope.aliyuncs.com/compatible-mode/v1 for the China
@@ -142,13 +168,6 @@ endpoints:
     base_url: https://api.z.ai/api/paas/v4/
     context_window: 202752
 
-  # OpenAI direct. No base_url needed; the OpenAI SDK defaults to
-  # https://api.openai.com/v1.
-  openai-gpt-4.1-nano:
-    provider: openai
-    model: gpt-4.1-nano
-    api_key_env: OPENAI_API_KEY
-
   # Route to deepseek/deepseek-chat model via OpenRouter.
   #
   # `extra_body` is an optional vendor passthrough sent on every call to
@@ -168,10 +187,33 @@ endpoints:
       reasoning:
         enabled: false
 
+  # deepseek/deepseek-v4-flash-0731 via OpenRouter.
+  openrouter-deepseek-v4-flash:
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash-0731
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 1310720
+    cost:
+      input_per_1m: 0.035
+      output_per_1m: 0.075
+      cache_hit_input_per_1m: 0.008
+      pricing_url: https://openrouter.ai/deepseek/deepseek-v4-flash-0731
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        28 upstreams, 0.035 to 0.44 in and 0.064 to 1.32 out. The
+        declared rate is OpenInference's, the cheapest currently
+        serving. Venice bills 0.175 / 0.35, five times the declared
+        input rate, so reconcile against the reported cost field.
+    notes: >
+      The context window varies by upstream, from 131072 to 1310720.
+      The figure above is the slug's headline, which only Cloudflare
+      offers; most upstreams serve 1048576.
+
   # Embedding endpoints via OpenRouter, called with create_embeddings()
   # rather than send_message(). All nine verified models are shown, in
   # alphabetical order by endpoint name; dimensions and prices below
-  # match the README, both current as of 2026-07-29.
+  # match the README.
   #
   # output_per_1m is 0.00 throughout: embedding endpoints bill input
   # only and return no completion tokens.
@@ -192,7 +234,7 @@ endpoints:
       input_per_1m: 0.005
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/baai/bge-base-en-v1.5
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
     notes: English only, and the shortest context of the embedding set.
 
   openrouter-embed-bge-m3:
@@ -206,7 +248,7 @@ endpoints:
       input_per_1m: 0.01
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/baai/bge-m3
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
     notes: Multilingual.
 
   openrouter-embed-mistral-embed-2312:
@@ -220,7 +262,7 @@ endpoints:
       input_per_1m: 0.10
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/mistralai/mistral-embed-2312
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
     notes: >
       The most expensive of the embedding set, at 10x bge-m3 for the
       same width and context.
@@ -237,7 +279,7 @@ endpoints:
       input_per_1m: 0.00
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/nvidia/nemotron-3-embed-1b:free
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
       pricing_notes: "Free tier. Rate limits apply."
 
   openrouter-embed-pplx-v1-0.6b:
@@ -251,7 +293,7 @@ endpoints:
       input_per_1m: 0.004
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/perplexity/pplx-embed-v1-0.6b
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
     notes: Cheapest paid endpoint of the embedding set.
 
   openrouter-embed-qwen3-4b:
@@ -265,7 +307,7 @@ endpoints:
       input_per_1m: 0.02
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/qwen/qwen3-embedding-4b
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
       pricing_notes: >
         Priced above qwen3-embedding-8b despite being the smaller
         model. Verified against the model page, not a transcription
@@ -282,7 +324,10 @@ endpoints:
       input_per_1m: 0.01
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/qwen/qwen3-embedding-8b
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Three upstreams, 0.01 to 0.04. The declared rate is the
+        cheapest and matches two of them; SiliconFlow bills 4x.
     notes: Widest vector here, and half the price of the 4b.
 
   openrouter-embed-text-embedding-3-large:
@@ -296,7 +341,7 @@ endpoints:
       input_per_1m: 0.13
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/openai/text-embedding-3-large
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
 
   openrouter-embed-text-embedding-3-small:
     provider: openrouter
@@ -309,14 +354,35 @@ endpoints:
       input_per_1m: 0.02
       output_per_1m: 0.00
       pricing_url: https://openrouter.ai/openai/text-embedding-3-small
-      pricing_checked: "2026-07-29"
+      pricing_checked: "2026-08-25"
 
-  # Route to openai/gpt-4.1-nano model via OpenRouter
+  # Route to openai/gpt-4.1-nano via OpenRouter. One of three
+  # configured routes to gpt-4.1-nano. See the file header.
   openrouter-gpt-4.1-nano:
     provider: openrouter
     model: openai/gpt-4.1-nano
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
+
+  # inclusionai/ling-3.0-flash via OpenRouter.
+  openrouter-ling-3.0-flash:
+    provider: openrouter
+    model: inclusionai/ling-3.0-flash
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 262144
+    cost:
+      input_per_1m: 0.021
+      output_per_1m: 0.063
+      cache_hit_input_per_1m: 0.0042
+      pricing_url: https://openrouter.ai/inclusionai/ling-3.0-flash
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Three upstream entries, 0.021 to 0.06 in. Novita appears twice
+        at different rates. The declared rate is the cheaper Novita
+        entry.
+    notes: >
+      The context window varies by upstream, from 131072 to 262144.
 
   # Route to xiaomi/mimo-v2.5 via OpenRouter. This is the Quickstart
   # default in the README: a cheap general-purpose model, smoke-verified
@@ -326,6 +392,20 @@ endpoints:
     model: xiaomi/mimo-v2.5
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
+    cost:
+      input_per_1m: 0.14
+      output_per_1m: 0.28
+      cache_hit_input_per_1m: 0.0028
+      pricing_url: https://openrouter.ai/xiaomi/mimo-v2.5
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Five upstreams, 0.119 to 0.400 in and 0.238 to 2.000 out. The
+        declared rate is Xiaomi's. Parasail matches it on input and
+        output, so Xiaomi is cheapest only once cache reads are
+        counted, and the 0.119 shown on the model page is GMICloud,
+        deranked. Reconcile
+        against the reported cost field, not this block, unless the
+        upstream is pinned via extra_body.
 
   # Alternative: mistralai/mistral-nemo via OpenRouter. An older (released
   # July 2024) but mature and inexpensive OSS model. Useful when cost is
@@ -337,17 +417,78 @@ endpoints:
     api_key_env: OPENROUTER_API_KEY
     base_url: https://openrouter.ai/api/v1
 
-  # Anthropic direct (native Messages API; requires the [anthropic] extra
-  # so `uv pip install llm-router-ledger[anthropic]` installs the SDK).
-  anthropic-claude-haiku:
-    provider: anthropic
-    model: claude-haiku-4-5
-    api_key_env: ANTHROPIC_API_KEY
+  # nvidia/nemotron-3.5-content-safety:free via OpenRouter. A safety
+  # classifier rather than a general chat model: it answers every prompt
+  # with a verdict, so "What is 17 * 23?" returns "User Safety: safe".
+  # Called with send_message(), like any other chat endpoint.
+  openrouter-nemotron-3.5-content-safety-free:
+    provider: openrouter
+    model: nvidia/nemotron-3.5-content-safety:free
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 128000
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/nvidia/nemotron-3.5-content-safety:free
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Free tier. Capacity is shared with all other users, so 429s
+        are common.
+    notes: >
+      Reports completion_reasoning_tokens above completion_tokens on
+      short prompts (178 against 168). Reasoning is
+      therefore not a subset of the completion count on this endpoint,
+      and the ledger records what the provider reports. It also
+      prepends a large classifier template, so prompt_tokens is far
+      higher than the submitted text implies.
+
+  # nvidia/nemotron-3.5-lightning:free via OpenRouter. Free, with a 1M
+  # context.
+  openrouter-nemotron-3.5-lightning-free:
+    provider: openrouter
+    model: nvidia/nemotron-3.5-lightning:free
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 1000000
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
+      pricing_url: https://openrouter.ai/nvidia/nemotron-3.5-lightning:free
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Free tier, and the provider reports cost as a genuine 0, not a
+        missing field. Capacity is shared with all other users, so
+        429s are common.
+
+  # qwen/qwen3.8-27b via OpenRouter. Accepts text, image and video on
+  # input; the adapter sends text only.
+  openrouter-qwen3.8-27b:
+    provider: openrouter
+    model: qwen/qwen3.8-27b
+    api_key_env: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    context_window: 1000000
+    cost:
+      input_per_1m: 0.35
+      output_per_1m: 2.75
+      cache_hit_input_per_1m: 0.035
+      pricing_url: https://openrouter.ai/qwen/qwen3.8-27b
+      pricing_checked: "2026-08-25"
+      pricing_notes: >
+        Ten upstreams, 0.35 to 0.48 in and 2.55 to 3.4 out. The declared
+        rate is Chutes', the cheapest currently serving; CoreWeave
+        bills 0.4 / 3.0.
+    notes: >
+      The context window varies by upstream, from 65500 to 1000000. The
+      figure above is Alibaba's, the only upstream offering it; most
+      serve 262144.
 
 # Role mappings group endpoints by purpose so scripts can call
 # get_role_endpoints(project, role) instead of hard-coding names.
+# Deprecated: removed in 0.3.0, replaced by route groups.
 roles:
   default:
     quick: local-llama
     capable: openrouter-gpt-4.1-nano
-    cheap: deepseek-direct
+    cheap: openrouter-ling-3.0-flash
