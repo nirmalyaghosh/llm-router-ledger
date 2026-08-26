@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Added:
+  - `ledger_model()`, behind the new `[pydantic-ai]` extra: a Pydantic
+    AI model that records every call an agent makes. Writes the same
+    rows as `record_run()`, and additionally records a call that
+    raised, resolves `purpose` per call, and covers streaming.
+  - `UsageTracker.log_error(usage=...)`, recording the tokens a call
+    consumed before it failed. Written only when the counts are
+    non-zero, so an ordinary failure carries no usage block.
+- Changed:
+  - the `openai` upper bound is `<4`, was `<3`, which the
+    `[pydantic-ai]` extra requires. The API surface this package uses
+    is unchanged across the major.
+- Fixed:
+  - a failed ledger write in the Pydantic AI model could replace the
+    provider's exception or discard a completed call. It is logged and
+    the call proceeds.
+
 ## [0.2.2] - 2026-08-26
 
 - Fixed: `.env` is now read from the working directory, so an

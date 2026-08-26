@@ -42,7 +42,13 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
-    "openai>=1.55.0,<3",
+    # Upper bound at <4 rather than <3 so the pydantic-ai extra is
+    # installable: pydantic-ai-slim declares openai>=3.0.0 on every
+    # extra that touches the OpenAI SDK. openai 3.x leaves the API
+    # surface this package uses unchanged; the major replaces httpx
+    # with the httpx2 fork and raises the Python, anyio and pydantic
+    # floors, none of which constrain this package.
+    "openai>=1.55.0,<4",
     "pydantic>=2.7",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
@@ -53,11 +59,16 @@ anthropic = ["anthropic>=0.30"]
 dev = [
     "anthropic>=0.30",
     "mypy>=1.10",
+    "pydantic-ai-slim[openai]>=2.34,<3",
     "pytest>=8.0",
     "ruff>=0.5",
     "twine>=5.0",
     "types-pyyaml>=6.0",
 ]
+# The lower bound is the version the RequestUsage field names were
+# read from and the mapping in _usage.py was written against.
+# Re-verify that mapping before raising it.
+pydantic-ai = ["pydantic-ai-slim[openai]>=2.34,<3"]
 
 [project.urls]
 Homepage = "https://github.com/nirmalyaghosh/llm-router-ledger"
