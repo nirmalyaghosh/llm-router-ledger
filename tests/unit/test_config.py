@@ -4,6 +4,9 @@ Unit tests for llm_router_ledger.config.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 from datetime import date
 from pathlib import Path
 
@@ -175,6 +178,44 @@ def test_cost_estimate_raises_when_cache_tokens_sum_exceeds_input() -> None:
             cached_tokens=60,
             cache_write_tokens=60,
         )
+
+
+def test_dotenv_is_read_from_the_working_directory(
+    tmp_path: Path,
+) -> None:
+    """
+    A .env in the working directory is loaded even when the package
+    itself lives outside the caller's project.
+
+    find_dotenv otherwise walks up from config.py's own directory,
+    which reaches this repo's .env only because the dev environment
+    installs from source in-tree. Installed from a wheel it walks up
+    from site-packages and finds nothing.
+
+    Run as a script file in a subprocess rather than with -c, because
+    the loading happens once at import and with -c the calling frame
+    has no file, so find_dotenv falls back to the working directory
+    regardless and the test would pass against the unfixed code.
+    """
+    (tmp_path / ".env").write_text(
+        "LRL_TEST_DOTENV_KEY=from-working-directory\n",
+        encoding="utf-8",
+    )
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import os\n"
+        "import llm_router_ledger.config  # noqa: F401\n"
+        "print(os.environ.get('LRL_TEST_DOTENV_KEY', ''))\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(probe)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "from-working-directory"
 
 
 def test_embedding_dimensions_loads_and_defaults_to_none(
