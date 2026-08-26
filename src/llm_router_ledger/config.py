@@ -29,7 +29,10 @@ from typing import (
 
 import yaml
 
-from dotenv import load_dotenv
+from dotenv import (
+    find_dotenv,
+    load_dotenv,
+)
 from pydantic import (
     BaseModel,
     Field,
@@ -43,7 +46,17 @@ from llm_router_ledger.exceptions import (
 
 logger = get_logger(__name__)
 
-load_dotenv()
+# find_dotenv searches upward from this module's own directory by
+# default, which resolves to site-packages for an installed
+# distribution and therefore never reaches the caller's project. A
+# .env in the working directory was ignored unless the package had
+# been installed from source within that project. usecwd=True searches
+# from the working directory instead, matching where
+# llm_endpoints.yaml is resolved.
+#
+# load_dotenv does not override variables already present in the
+# environment, so existing configuration takes precedence.
+load_dotenv(find_dotenv(usecwd=True))
 
 
 ProviderName = Literal[
