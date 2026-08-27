@@ -186,6 +186,22 @@ def _format_passages(chunks: list[Chunk]) -> str:
     )
 
 
+def _report_failed_attempt(
+    *,
+    attempt: int,
+    exc: Exception,
+    purpose: str,
+) -> None:
+    """
+    Helper function used to say that an attempt failed before the
+    next one starts.
+    """
+    print(
+        f"  {purpose}: attempt {attempt} failed, retrying."
+        f" {type(exc).__name__}: {exc}"
+    )
+
+
 async def _run_agent(
     *,
     build_model: BuildModel,
@@ -214,9 +230,14 @@ async def _run_agent(
         )
         try:
             result = await agent.run(question)
-        except Exception:
+        except Exception as exc:
             if attempt == MAX_ATTEMPTS:
                 raise
+            _report_failed_attempt(
+                attempt=attempt,
+                exc=exc,
+                purpose=purpose,
+            )
             continue
         after_run(result, endpoint, purpose, stamp)
         return result.output
@@ -558,9 +579,14 @@ async def run_pipeline(
         )
         try:
             result = await answerer.run(prompt)
-        except Exception:
+        except Exception as exc:
             if attempt == MAX_ATTEMPTS:
                 raise
+            _report_failed_attempt(
+                attempt=attempt,
+                exc=exc,
+                purpose="answer-synthesis",
+            )
             continue
         after_run(
             result,
