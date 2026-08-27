@@ -22,10 +22,10 @@ Prerequisites:
    LMSTUDIO_API_KEY to any value.
 
 Embeddings are gated to providers verified end to end, so
-provider: openai raises. Regenerating prepared.json with a different
-endpoint changes the vector width and the similarity behaviour, so
-regenerate for your own document and leave the shipped one alone.
-Output for your own document does not belong in version control.
+provider: openai raises. The endpoint is recorded in prepared.json.
+The examples compare it against their own embedding endpoint and
+reject a corpus built with a different one. prepared.json is not
+kept in version control.
 """
 
 from __future__ import annotations
@@ -43,9 +43,7 @@ from dotenv import (
     load_dotenv,
 )
 
-os.environ.setdefault("LRL_RUN_TAG", "agentic-rag-example")
-
-from llm_router_ledger import (  # noqa: E402
+from llm_router_ledger import (
     ProviderUnavailableError,
     UsageTracker,
     create_embeddings,
@@ -59,9 +57,10 @@ DEFAULT_SOURCE = HERE / "corpus" / "synthetic_annual_report.md"
 
 DEFAULT_OUT = HERE / "corpus" / "prepared.json"
 
-# Shared with the examples through
-# LRL_RAG_EXAMPLE_EMBED_ENDPOINT, so a corpus cannot be built
-# against one endpoint and queried against another.
+# A second copy of the default in _common.py, so that this script
+# does not import the examples and acquire the pydantic-ai
+# dependency. load_corpus rejects a corpus whose endpoint differs
+# from the query endpoint.
 EMBED_ENDPOINT = os.environ.get(
     "LRL_RAG_EXAMPLE_EMBED_ENDPOINT",
     "lmstudio-embed-qwen3-0.6b",
@@ -74,44 +73,6 @@ MIN_WORDS = 140
 # A chunk below this is merged into the next one. A heading with a
 # single short paragraph under it retrieves noise on its own.
 MERGE_BELOW = 70
-
-
-def chunk_markdown(text: str) -> list[dict[str, str]]:
-    """
-    Split a Markdown document into passages, each under one heading.
-
-    Paragraphs accumulate to MIN_WORDS. A heading starts a new chunk.
-    A long paragraph is never split: a figure separated from its
-    qualifier retrieves worse than a long chunk.
-    """
-    chunks: list[dict[str, str]] = []
-    heading = "Introduction"
-    buffer: list[str] = []
-
-    def flush() -> None:
-        if not buffer:
-            return
-        chunks.append(
-            {
-                "heading": heading,
-                "text": "\n\n".join(buffer).strip(),
-            }
-        )
-        buffer.clear()
-
-    for block in re.split(r"\n\s*\n", text):
-        block = block.strip()
-        if not block:
-            continue
-        if block.startswith("#"):
-            flush()
-            heading = block.lstrip("#").strip()
-            continue
-        buffer.append(block)
-        if len(" ".join(buffer).split()) >= MIN_WORDS:
-            flush()
-    flush()
-    return _merge_small_chunks(chunks)
 
 
 def _join_chunks(
@@ -163,6 +124,44 @@ def _merge_small_chunks(
     return merged
 
 
+def chunk_markdown(text: str) -> list[dict[str, str]]:
+    """
+    Split a Markdown document into passages, each under one heading.
+
+    Paragraphs accumulate to MIN_WORDS. A heading starts a new chunk.
+    A long paragraph is never split: a figure separated from its
+    qualifier retrieves worse than a long chunk.
+    """
+    chunks: list[dict[str, str]] = []
+    heading = "Introduction"
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        chunks.append(
+            {
+                "heading": heading,
+                "text": "\n\n".join(buffer).strip(),
+            }
+        )
+        buffer.clear()
+
+    for block in re.split(r"\n\s*\n", text):
+        block = block.strip()
+        if not block:
+            continue
+        if block.startswith("#"):
+            flush()
+            heading = block.lstrip("#").strip()
+            continue
+        buffer.append(block)
+        if len(" ".join(buffer).split()) >= MIN_WORDS:
+            flush()
+    flush()
+    return _merge_small_chunks(chunks)
+
+
 def main() -> int:
     """
     Chunk the source document, embed every chunk, and write the result.
@@ -184,6 +183,8 @@ def main() -> int:
     )
     print(f"{len(chunks)} chunks from {args.source.name}")
 
+    # After load_dotenv, so shell wins, then .env, then this.
+    os.environ.setdefault("LRL_RUN_TAG", "agentic-rag-example")
     tracker = UsageTracker(
         log_path=Path("logs/usage.jsonl"),
         project_id="agentic-rag-example",
@@ -201,6 +202,9 @@ def main() -> int:
             "Check the endpoint is reachable. The default embedding"
             " endpoint needs LM Studio serving on port 1234."
         )
+        return 1
+    except Exception as exc:
+        print(f"FAILED: {type(exc).__name__}: {exc}")
         return 1
     finally:
         tracker.close()
@@ -221,7 +225,9 @@ def main() -> int:
                 "dimensions": len(vectors[0]),
                 "chunks": [
                     {**chunk, "vector": list(vector)}
-                    for chunk, vector in zip(chunks, vectors)
+                    for chunk, vector in zip(
+                        chunks, vectors, strict=True
+                    )
                 ],
             },
             indent=1,

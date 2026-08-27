@@ -16,10 +16,9 @@ path runs alongside Pydantic AI's, both writing to the same JSONL.
 Embeddings are gated to verified providers, so provider: openai
 raises. prepare_corpus.py builds the corpus vectors and the
 examples embed each query at run time, both through
-lmstudio-embed-qwen3-0.6b, which runs locally, so LM Studio
-must be serving on port 1234 with the embedding model loaded. A different embedding endpoint degrades
-similarity silently, though embedding_dimensions catches a width
-mismatch.
+lmstudio-embed-qwen3-0.6b, which runs locally, so LM Studio must
+be serving on port 1234 with the embedding model loaded. Both
+must use the same endpoint, which load_corpus checks.
 """
 
 from __future__ import annotations
@@ -30,8 +29,8 @@ import os
 import sys
 
 from collections.abc import Callable
-from functools import lru_cache
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -64,10 +63,6 @@ load_dotenv(find_dotenv(usecwd=True))
 # prefix keeps them clear of the library's own LRL_ variables.
 # The values are endpoint names from llm_endpoints.yaml, not
 # model ids.
-CHEAP_ENDPOINT = os.environ.get(
-    "LRL_RAG_EXAMPLE_CHEAP_ENDPOINT",
-    "openrouter-nemotron-3.5-lightning-free",
-)
 ANSWERER_ENDPOINT = os.environ.get(
     "LRL_RAG_EXAMPLE_ANSWERER_ENDPOINT",
     "openrouter-nemotron-3.5-lightning-free",
@@ -75,6 +70,10 @@ ANSWERER_ENDPOINT = os.environ.get(
 CAPABLE_ENDPOINT = os.environ.get(
     "LRL_RAG_EXAMPLE_CAPABLE_ENDPOINT",
     "openrouter-mimo-v2.5",
+)
+CHEAP_ENDPOINT = os.environ.get(
+    "LRL_RAG_EXAMPLE_CHEAP_ENDPOINT",
+    "openrouter-nemotron-3.5-lightning-free",
 )
 EMBED_ENDPOINT = os.environ.get(
     "LRL_RAG_EXAMPLE_EMBED_ENDPOINT",
@@ -92,15 +91,6 @@ TOP_K = 4
 MAX_ATTEMPTS = 3
 
 
-class Intent(BaseModel):
-    """
-    What kind of question was asked.
-    """
-
-    kind: Literal["factual", "comparative", "other"]
-    reason: str = Field(description="One short sentence.")
-
-
 class Ambiguity(BaseModel):
     """
     Whether the question can be answered as asked.
@@ -111,22 +101,6 @@ class Ambiguity(BaseModel):
         default="",
         description="Asked only when ambiguous.",
     )
-
-
-class Rewrite(BaseModel):
-    """
-    The question restated for retrieval.
-    """
-
-    query: str
-
-
-class Plan(BaseModel):
-    """
-    The search terms to retrieve_chunks on.
-    """
-
-    terms: list[str]
 
 
 @dataclass(frozen=True)
@@ -140,27 +114,52 @@ class Chunk:
     vector: tuple[float, ...]
 
 
-def load_corpus() -> list[Chunk]:
+class Intent(BaseModel):
     """
-    Helper function used to read the prepared corpus.
+    What kind of question was asked.
+    """
 
-    prepare_corpus.py writes it. Run that first: the vectors
-    are not in the repository.
+    kind: Literal["factual", "comparative", "other"]
+    reason: str = Field(description="One short sentence.")
+
+
+class Plan(BaseModel):
     """
-    if not CORPUS_PATH.exists():
-        raise SystemExit(
-            f"No prepared corpus at {CORPUS_PATH}."
-            " Run prepare_corpus.py first."
-        )
-    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
-    return [
-        Chunk(
-            heading=chunk["heading"],
-            text=chunk["text"],
-            vector=tuple(chunk["vector"]),
-        )
-        for chunk in raw["chunks"]
-    ]
+    The search terms to retrieve_chunks on.
+    """
+
+    terms: list[str]
+
+
+class Rewrite(BaseModel):
+    """
+    The question restated for retrieval.
+    """
+
+    query: str
+
+
+# (result, endpoint_name, purpose, metadata) -> None.
+AfterRun = Callable[
+    [Any, str, str, dict[str, Any] | None],
+    None,
+]
+
+# (endpoint_name, purpose, metadata) -> a Pydantic AI model.
+BuildModel = Callable[
+    [str, str, dict[str, Any] | None],
+    Any,
+]
+
+
+@lru_cache(maxsize=1)
+def _config() -> Any:
+    """
+    Helper function used to read llm_endpoints.yaml once.
+
+    Cached because the pipeline resolves an endpoint per agent.
+    """
+    return load_config()
 
 
 def _cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
@@ -177,24 +176,6 @@ def _cosine_similarity(a: tuple[float, ...], b: tuple[float, ...]) -> float:
     return dot / norm if norm else 0.0
 
 
-def retrieve_chunks(
-    *,
-    query_vector: list[float],
-    chunks: list[Chunk],
-    top_k: int = TOP_K,
-) -> list[Chunk]:
-    """
-    Helper function used to return the closest chunks to the query.
-    """
-    query = tuple(query_vector)
-    scored = sorted(
-        chunks,
-        key=lambda c: _cosine_similarity(query, c.vector),
-        reverse=True,
-    )
-    return scored[:top_k]
-
-
 def _format_passages(chunks: list[Chunk]) -> str:
     """
     Helper function used to format chunks for the model.
@@ -203,90 +184,6 @@ def _format_passages(chunks: list[Chunk]) -> str:
         f"## {chunk.heading}\n{chunk.text}"
         for chunk in chunks
     )
-
-
-def embed_query(
-    question: str,
-    *,
-    tracker: UsageTracker,
-    endpoint: str = EMBED_ENDPOINT,
-) -> list[float]:
-    """
-    Helper function used to embed a query through this library.
-
-    Writes a query-embed row to the same ledger the agents write to.
-    """
-    result = create_embeddings(
-        endpoint_name=endpoint,
-        texts=[question],
-        tracker=tracker,
-        purpose="query-embed",
-    )
-    return list(result.vectors[0])
-
-
-@lru_cache(maxsize=1)
-def _config() -> Any:
-    """
-    Helper function used to read llm_endpoints.yaml once.
-
-    Cached because the pipeline resolves an endpoint per agent.
-    """
-    return load_config()
-
-
-def endpoint_config(endpoint_name: str) -> Any:
-    """
-    Helper function used to look up one endpoint.
-
-    Raises EndpointNotFoundError rather than KeyError, matching what
-    the library raises for an unknown name.
-    """
-    config = _config()
-    if endpoint_name not in config.endpoints:
-        raise EndpointNotFoundError(
-            f"Endpoint '{endpoint_name}' not found in config"
-        )
-    return config.endpoints[endpoint_name]
-
-
-def get_provider_name(endpoint_name: str) -> str:
-    """
-    Helper function used to read an endpoint's provider.
-
-    record_run needs it explicitly. The name on the messages is the
-    framework's provider id, which is openai for every OpenAI-compatible
-    server.
-    """
-    return endpoint_config(endpoint_name).provider
-
-
-# (endpoint_name, purpose, metadata) -> a Pydantic AI model.
-BuildModel = Callable[
-    [str, str, dict[str, Any] | None],
-    Any,
-]
-
-# (result, endpoint_name, purpose, metadata) -> None.
-AfterRun = Callable[
-    [Any, str, str, dict[str, Any] | None],
-    None,
-]
-
-
-def _stamp_attempt(
-    *,
-    attempt: int,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """
-    Helper function used to add the attempt number to a call's
-    metadata, from the second attempt onwards.
-    """
-    meta = dict(metadata or {})
-    if attempt > 1:
-        meta["attempt"] = attempt
-    return meta or None
 
 
 async def _run_agent(
@@ -326,6 +223,183 @@ async def _run_agent(
     raise AssertionError("unreachable")
 
 
+def _stamp_attempt(
+    *,
+    attempt: int,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """
+    Helper function used to add the attempt number to a call's
+    metadata, from the second attempt onwards.
+    """
+    meta = dict(metadata or {})
+    if attempt > 1:
+        meta["attempt"] = attempt
+    return meta or None
+
+
+def configure_stdout() -> None:
+    """
+    Helper function used to keep model output printable when stdout is
+    not UTF-8.
+
+    Redirecting or piping on Windows gives stdout the cp1252 locale
+    encoding, and a model answer carrying a narrow no-break space then
+    raises UnicodeEncodeError at print time, after every call in the
+    run has been paid for. A UTF-8 stdout, the normal case on Linux
+    and macOS, is left alone.
+    """
+    encoding = getattr(sys.stdout, "encoding", "") or ""
+    if encoding.lower().replace("-", "") == "utf8":
+        return
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+
+def count_lines(log_path: Path) -> int:
+    """
+    Helper function used to mark where this run's rows begin.
+    """
+    if not log_path.exists():
+        return 0
+    return len(
+        log_path.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def embed_query(
+    question: str,
+    *,
+    tracker: UsageTracker,
+    endpoint: str = EMBED_ENDPOINT,
+) -> list[float]:
+    """
+    Helper function used to embed a query through this library.
+
+    Writes a query-embed row to the same ledger the agents write to.
+    """
+    result = create_embeddings(
+        endpoint_name=endpoint,
+        texts=[question],
+        tracker=tracker,
+        purpose="query-embed",
+    )
+    return list(result.vectors[0])
+
+
+def endpoint_config(endpoint_name: str) -> Any:
+    """
+    Helper function used to look up one endpoint.
+
+    Raises EndpointNotFoundError rather than KeyError, matching what
+    the library raises for an unknown name.
+    """
+    config = _config()
+    if endpoint_name not in config.endpoints:
+        raise EndpointNotFoundError(
+            f"Endpoint '{endpoint_name}' not found in config"
+        )
+    return config.endpoints[endpoint_name]
+
+
+def get_provider_name(endpoint_name: str) -> str:
+    """
+    Helper function used to read an endpoint's provider.
+
+    record_run needs it explicitly. The name on the messages is the
+    framework's provider id, which is openai for every OpenAI-compatible
+    server.
+    """
+    return endpoint_config(endpoint_name).provider
+
+
+def load_corpus(*, endpoint: str) -> list[Chunk]:
+    """
+    Helper function used to read the prepared corpus.
+
+    prepare_corpus.py writes it. Run that first: the vectors
+    are not in the repository.
+
+    The query endpoint must match the one the corpus was built
+    with. Otherwise _cosine_similarity zips vectors from two
+    different spaces and returns a confident wrong answer.
+    """
+    if not CORPUS_PATH.exists():
+        raise SystemExit(
+            f"No prepared corpus at {CORPUS_PATH}."
+            " Run prepare_corpus.py first."
+        )
+    raw = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    built_with = raw.get("endpoint")
+    if built_with != endpoint:
+        named = built_with or "an unrecorded endpoint"
+        raise SystemExit(
+            f"The corpus was built with {named}, and the query"
+            f" would be embedded with {endpoint}. Rebuild it"
+            f" with prepare_corpus.py --endpoint {endpoint}."
+        )
+    return [
+        Chunk(
+            heading=chunk["heading"],
+            text=chunk["text"],
+            vector=tuple(chunk["vector"]),
+        )
+        for chunk in raw["chunks"]
+    ]
+
+
+def print_ledger_rows(log_path: Path, since: int) -> None:
+    """
+    Print the rows this run wrote, grouped by purpose.
+
+    Without it both examples look like ordinary Pydantic AI usage.
+    """
+    lines = log_path.read_text(
+        encoding="utf-8",
+    ).splitlines()[since:]
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for line in lines:
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("event") != "llm_response":
+            continue
+        rows.setdefault(event.get("purpose", ""), []).append(event)
+
+    print()
+    print("ledger rows by purpose:")
+    for purpose, events in rows.items():
+        print(f"  {purpose}")
+        for event in events:
+            usage = event.get("usage", {})
+            note = event.get("metadata") or ""
+            print(
+                f"    {event.get('provider', ''):11}"
+                f" {event.get('model', ''):34}"
+                f" {usage.get('total_tokens', 0):>6}"
+                f"  {event.get('generation_id') or ''}"
+                f" {note}".rstrip()
+            )
+
+
+def retrieve_chunks(
+    *,
+    query_vector: list[float],
+    chunks: list[Chunk],
+    top_k: int = TOP_K,
+) -> list[Chunk]:
+    """
+    Helper function used to return the closest chunks to the query.
+    """
+    query = tuple(query_vector)
+    scored = sorted(
+        chunks,
+        key=lambda c: _cosine_similarity(query, c.vector),
+        reverse=True,
+    )
+    return scored[:top_k]
+
+
 async def run_pipeline(
     question: str,
     *,
@@ -343,7 +417,7 @@ async def run_pipeline(
     ask is not a disambiguator, so there is no scripted answer and no
     early exit.
     """
-    chunks = load_corpus()
+    chunks = load_corpus(endpoint=embed_endpoint)
 
     intent = await _run_agent(
         build_model=build_model,
@@ -496,66 +570,3 @@ async def run_pipeline(
         )
         return result.output
     raise AssertionError("unreachable")
-
-
-def configure_stdout() -> None:
-    """
-    Helper function used to keep model output printable when stdout is
-    not UTF-8.
-
-    Redirecting or piping on Windows gives stdout the cp1252 locale
-    encoding, and a model answer carrying a narrow no-break space then
-    raises UnicodeEncodeError at print time, after every call in the
-    run has been paid for. A UTF-8 stdout, the normal case on Linux
-    and macOS, is left alone.
-    """
-    encoding = getattr(sys.stdout, "encoding", "") or ""
-    if encoding.lower().replace("-", "") == "utf8":
-        return
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-
-def print_ledger_rows(log_path: Path, since: int) -> None:
-    """
-    Print the rows this run wrote, grouped by purpose.
-
-    Without it both examples look like ordinary Pydantic AI usage.
-    """
-    lines = log_path.read_text(
-        encoding="utf-8",
-    ).splitlines()[since:]
-    rows: dict[str, list[dict[str, Any]]] = {}
-    for line in lines:
-        if not line.strip():
-            continue
-        event = json.loads(line)
-        if event.get("event") != "llm_response":
-            continue
-        rows.setdefault(event.get("purpose", ""), []).append(event)
-
-    print()
-    print("ledger rows by purpose:")
-    for purpose, events in rows.items():
-        print(f"  {purpose}")
-        for event in events:
-            usage = event.get("usage", {})
-            note = event.get("metadata") or ""
-            print(
-                f"    {event.get('provider', ''):11}"
-                f" {event.get('model', ''):34}"
-                f" {usage.get('total_tokens', 0):>6}"
-                f"  {event.get('generation_id') or ''}"
-                f" {note}".rstrip()
-            )
-
-
-def count_lines(log_path: Path) -> int:
-    """
-    Helper function used to mark where this run's rows begin.
-    """
-    if not log_path.exists():
-        return 0
-    return len(
-        log_path.read_text(encoding="utf-8").splitlines()
-    )

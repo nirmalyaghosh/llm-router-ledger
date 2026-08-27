@@ -23,7 +23,8 @@ Two questions worth running:
 Prerequisites:
 1. Install the extra: `uv pip install llm-router-ledger[pydantic-ai]`.
 2. Copy `examples/llm_endpoints.example.yaml` to `llm_endpoints.yaml`
-   in the working directory.
+   in the working directory. That file and logs/usage.jsonl are both
+   resolved from there, so run every command from the same directory.
 3. Set OPENROUTER_API_KEY.
 4. Python 3.12 or later, which this library requires.
 5. Run LM Studio's server on port 1234 with
@@ -34,8 +35,8 @@ Prerequisites:
 
 Embeddings are gated to providers verified end to end, so
 provider: openai raises. The corpus vectors and every query are
-embedded with lmstudio-embed-qwen3-0.6b; a different embedding
-endpoint degrades similarity silently.
+embedded with lmstudio-embed-qwen3-0.6b. A corpus built with a
+different endpoint is rejected at load time.
 
 Every endpoint defaults to a free one. Small models are less
 reliable at tool calling; --answerer moves the Answerer to a paid
@@ -52,17 +53,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-os.environ.setdefault("LRL_RUN_TAG", "agentic-rag-example")
-
-from llm_router_ledger import (  # noqa: E402
+from llm_router_ledger import (
     ProviderUnavailableError,
     UsageTracker,
 )
-from llm_router_ledger.integrations.pydantic_ai import (  # noqa: E402
+from llm_router_ledger.integrations.pydantic_ai import (
     ledger_model,
 )
 
-from _common import (  # noqa: E402
+from _common import (
     ANSWERER_ENDPOINT,
     CAPABLE_ENDPOINT,
     EMBED_ENDPOINT,
@@ -72,9 +71,9 @@ from _common import (  # noqa: E402
     run_pipeline,
 )
 
-LOG_PATH = Path("logs/usage.jsonl")
-
 DEFAULT_QUESTION = "What was Marine Systems revenue in FY2025?"
+
+LOG_PATH = Path("logs/usage.jsonl")
 
 
 def main() -> int:
@@ -101,6 +100,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # After _common's load_dotenv, so shell wins, then .env, then
+    # this. UsageTracker reads LRL_RUN_TAG when constructed.
+    os.environ.setdefault("LRL_RUN_TAG", "agentic-rag-example")
     tracker = UsageTracker(
         log_path=LOG_PATH,
         project_id="agentic-rag-example",
