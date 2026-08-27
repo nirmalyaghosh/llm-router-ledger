@@ -313,8 +313,8 @@ The cost limitation above applies here too: the framework keeps only
 integer usage fields, so a provider's reported cost never reaches these
 rows either. Reconcile by response id.
 
-See `examples/pydantic_ai_agent.py`, which runs both paths against the
-same endpoint.
+See `examples/agentic_rag/posthoc.py` and `ledger_model.py`, which run
+the same five-agent pipeline through each option.
 
 ## Setting a purpose an agent cannot pass
 
