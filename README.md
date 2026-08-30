@@ -9,13 +9,14 @@ request and response for offline cost reconciliation.
 | Status | Adapter | Providers |
 |---|---|---|
 | Supported | direct | Anthropic |
-| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
+| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, NVIDIA NIM, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
 | Supported | via OpenRouter | ByteDance Seed, InclusionAI Ling, Nvidia Nemotron, Xiaomi MiMo |
 | Planned | direct | Gemini |
 
 - Every "Supported" row is live-smoke-verified end-to-end.
 - Anthropic requires the optional `[anthropic]` extra: `uv pip install llm-router-ledger[anthropic]`.
 - For the "via OpenRouter" families, use `provider: openrouter` with the appropriate model id.
+- Nemotron is reachable both ways. `provider: nvidia` goes direct to NIM, which reports token counts only; `provider: openrouter` reports cost and upstream and is the route to reconcile against.
 - The table above is about text. Embeddings are gated separately and verified on OpenRouter, Ollama and LM Studio only; see [Embeddings](#embeddings).
 
 ### Free chat models

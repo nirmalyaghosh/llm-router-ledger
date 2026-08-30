@@ -67,6 +67,7 @@ ProviderName = Literal[
     "gemini",
     "lmstudio",
     "minimax",
+    "nvidia",
     "ollama",
     "openai",
     "openrouter",

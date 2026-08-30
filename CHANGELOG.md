@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     AI model that records every call an agent makes. Writes the same
     rows as `record_run()`, and additionally records a call that
     raised, resolves `purpose` per call, and covers streaming.
+  - `provider: nvidia` for NVIDIA NIM. Note that NIM reports token
+    counts only, so its rows carry no `usage_details`.
   - `UsageTracker.log_error(usage=...)`, recording the tokens a call
     consumed before it failed. Written only when the counts are
     non-zero, so an ordinary failure carries no usage block.

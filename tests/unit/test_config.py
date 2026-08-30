@@ -505,3 +505,27 @@ def test_local_openai_compat_is_rejected_with_migration_hint(
     assert "legacy-local" in message
     assert "ollama" in message
     assert "lmstudio" in message
+
+
+def test_nvidia_provider_loads_with_its_base_url(
+    tmp_path: Path,
+) -> None:
+    """
+    provider: nvidia is accepted by the ProviderName literal, which
+    Pydantic enforces, so this fails before the name is added. NIM
+    serves an OpenAI-compatible API, so no adapter of its own is
+    needed; only the name had to be added.
+    """
+    yaml_text = (
+        "endpoints:\n"
+        "  nvidia-test:\n"
+        "    provider: nvidia\n"
+        "    model: nvidia/nemotron-3.5-lightning-30b-a3b\n"
+        "    api_key_env: NVIDIA_API_KEY\n"
+        "    base_url: https://integrate.api.nvidia.com/v1\n"
+    )
+    p = tmp_path / "with_nvidia.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    ep = load_config(p).endpoints["nvidia-test"]
+    assert ep.provider == "nvidia"
+    assert ep.base_url == "https://integrate.api.nvidia.com/v1"
