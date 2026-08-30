@@ -75,6 +75,9 @@ endpoints:
     base_url: http://localhost:1234/v1
     context_window: 32768
     timeout_seconds: 900
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
 
   # Local Ollama. No real API key needed; any non-empty string works for OLLAMA_API_KEY.
   # The model below (qwen2.5vl:3b) is what examples/smoke_test_ollama.py was verified against.
@@ -85,6 +88,9 @@ endpoints:
     api_key_env: OLLAMA_API_KEY
     base_url: http://localhost:11434/v1
     context_window: 32768
+    cost:
+      input_per_1m: 0.00
+      output_per_1m: 0.00
 
   # MiniMax direct API. OpenAI-compatible endpoint per
   # https://platform.minimax.io/docs/api-reference/text-openai-api.
@@ -534,11 +540,40 @@ endpoints:
       figure above is Alibaba's, the only upstream offering it; most
       serve 262144.
 
-# Role mappings group endpoints by purpose so scripts can call
-# get_role_endpoints(project, role) instead of hard-coding names.
-# Deprecated: removed in 0.3.0, replaced by route groups.
-roles:
+# Route groups name a set of candidate endpoints and the strategy for
+# choosing between them. The first level is the project, matching the
+# project_id on the tracker; 'default' holds the groups every project
+# inherits, and a project's own group of the same name wins.
+#
+# priority records that the candidates are in preference order and
+# needs no rates. cheapest records that they should be compared on
+# their declared rate, so every candidate must declare a cost block.
+# strategy defaults to priority.
+#
+# Nothing selects a candidate yet. Read group.candidates and pass the
+# name you want to send_message().
+route_groups:
   default:
-    quick: local-llama
-    capable: openrouter-gpt-4.1-nano
-    cheap: openrouter-ling-3.0-flash
+    capable:
+      strategy: priority
+      candidates:
+        - openrouter-qwen3.8-27b
+        - openrouter-mimo-v2.5
+      notes: >
+        Preference order, strongest first.
+    low-cost:
+      strategy: cheapest
+      candidates:
+        - openrouter-nemotron-3.5-lightning-free
+        - openrouter-ling-3.0-flash
+        - openrouter-deepseek-v4-flash
+      notes: >
+        One free candidate and two paid ones, so a comparison has
+        something to order.
+    quick:
+      strategy: priority
+      candidates:
+        - local-llama
+        - local-lmstudio
+      notes: >
+        Local servers, in the order you would rather use them.

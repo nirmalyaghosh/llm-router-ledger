@@ -162,10 +162,14 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     config at args.path and print a one-line summary.
     """
     cfg = load_config(args.path)
+    group_count = sum(
+        len(groups)
+        for groups in cfg.route_groups.values()
+    )
     print(
         f"OK: {len(cfg.endpoints)}"
         f" endpoint(s),"
-        f" {len(cfg.roles)} role mapping(s)"
+        f" {group_count} route group(s)"
     )
     return 0
 

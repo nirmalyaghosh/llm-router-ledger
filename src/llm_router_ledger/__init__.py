@@ -30,6 +30,8 @@ from llm_router_ledger.config import (
     EndpointConfig,
     LLMConfig,
     ProviderName,
+    RouteGroupConfig,
+    RouteStrategy,
     get_context_window,
     load_config,
 )
@@ -85,6 +87,8 @@ __all__ = [
     "ProviderUnavailableError",
     "RateLimitedError",
     "ProviderName",
+    "RouteGroupConfig",
+    "RouteStrategy",
     "UsageTracker",
     "UsageTrackerError",
     "__version__",

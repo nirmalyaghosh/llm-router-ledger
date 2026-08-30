@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     raised, resolves `purpose` per call, and covers streaming.
   - `provider: nvidia` for NVIDIA NIM. Note that NIM reports token
     counts only, so its rows carry no `usage_details`.
+  - route groups: a `route_groups:` block naming candidate endpoints
+    and a strategy, `cheapest` or `priority`, plus
+    `LLMConfig.get_route_group()`, `RouteGroupConfig` and
+    `RouteStrategy`. The config layer only; nothing selects a
+    candidate yet.
   - `UsageTracker.log_error(usage=...)`, recording the tokens a call
     consumed before it failed. Written only when the counts are
     non-zero, so an ordinary failure carries no usage block.
@@ -21,15 +26,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the `openai` upper bound is `<4`, was `<3`, which the
     `[pydantic-ai]` extra requires. The API surface this package uses
     is unchanged across the major.
+  - `load_config()` rejects files it used to accept: a duplicate key
+    at any level, a file that is not UTF-8, a path that is not a
+    file, an endpoint that sets its own `name`, a blank or padded
+    endpoint name, a zero or negative `context_window`,
+    `embedding_dimensions` or `timeout_seconds`, a number written as
+    a YAML boolean, and a setting name or top-level block the
+    loader does not recognise.
 - Removed:
   - positional unpacking of `ChatResult` and `EmbeddingResult`.
     Both are now frozen dataclasses rather than `NamedTuple`
     subclasses; unpacking raises `TypeError`. Use attribute access
     (`.text`, `.vectors`, `.usage`, `.generation_id`).
+  - the `roles:` block and `LLMConfig.get_role_endpoints()`,
+    deprecated in 0.2.0. Use `route_groups:` and
+    `get_route_group()`; a config still carrying `roles:` is
+    rejected.
 - Fixed:
   - a failed ledger write in the Pydantic AI model could replace the
     provider's exception or discard a completed call. It is logged and
     the call proceeds.
+  - `load_config()` raised the underlying YAML or Pydantic error for
+    an invalid config. Every failure is now a `ConfigError`.
 
 ## [0.2.2] - 2026-08-26
 

@@ -180,6 +180,64 @@ endpoints:
 - An `extra_body` passed to `send_message()` replaces the endpoint's value outright. The two layers are not merged, so a caller that wants both must combine them itself. An opaque vendor passthrough carries no merge rules to memorise as a result.
 - **Known limitation:** `provider: anthropic` ignores `extra_body`, so the field has no effect there. `provider: openrouter` reaches Claude with `extra_body` intact.
 
+## Route groups
+
+A route group names a set of candidate endpoints and the strategy for
+choosing between them.
+
+```yaml
+route_groups:
+  default:
+    low-cost:
+      strategy: cheapest
+      candidates:
+        - openrouter-nemotron-3.5-lightning-free
+        - openrouter-ling-3.0-flash
+    quick:
+      strategy: priority
+      candidates:
+        - local-llama
+        - local-lmstudio
+```
+
+```python
+from llm_router_ledger import load_config
+
+config = load_config("llm_endpoints.yaml")
+group = config.get_route_group(project="reporting", name="low-cost")
+print(group.strategy, group.candidates)
+```
+
+The first level is the project, matching the `project_id` on the
+tracker. `default` holds the groups every project inherits, and a
+project's own group of the same name wins. A project that declares
+some groups of its own still inherits the rest.
+
+`strategy` records how candidates should be chosen. It defaults to
+`priority`, and nothing acts on it yet, so today it decides only
+whether every candidate must declare a cost.
+
+| Strategy | Recorded intent | Needs a cost block |
+|---|---|---|
+| `cheapest` | compare candidates on their declared rate, zero being free | yes, on every candidate |
+| `priority` | take the candidates in the order listed | no |
+
+`notes` is free text for whoever edits the config.
+
+A group is rejected when the config loads if it sets its own `name`,
+takes the name of an endpoint, names no candidates, names the same
+candidate twice, names an endpoint the config does not declare, or,
+under `cheapest`, names a candidate with no cost block.
+
+A rate belongs to the upstream serving a model rather than to the
+model itself, so a declared rate is an estimate that reconciliation
+may contradict.
+
+The config layer validates and stores a group and nothing more.
+Nothing selects a candidate or calls one yet: `send_message()` still
+takes `endpoint_name`, and the caller reads `group.candidates` and
+chooses. Selection, failover and the CLI commands are not built.
+
 ## Mirroring usage elsewhere
 
 `UsageTracker.subscribe()` registers a callback that receives every ledger entry, so usage can be mirrored to another store without this library depending on it:

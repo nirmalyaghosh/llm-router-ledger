@@ -33,10 +33,17 @@ endpoints:
       pricing_url: https://example.com/pricing
       pricing_checked: 2026-05-01
 
-roles:
+route_groups:
   default:
-    quick: ollama-local
-    capable: openrouter-test
+    capable:
+      strategy: cheapest
+      candidates:
+        - openrouter-test
+    quick:
+      strategy: priority
+      candidates:
+        - ollama-local
+        - openrouter-test
 """
 
 
