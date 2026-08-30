@@ -16,9 +16,12 @@ providers do not pay the anthropic import cost.
 
 from __future__ import annotations
 
+import importlib.util
+
 from typing import Any
 
 from llm_router_ledger.config import (
+    EndpointConfig,
     LLMConfig,
     load_config,
 )
@@ -95,3 +98,33 @@ def get_model_name(endpoint_name: str, config: LLMConfig | None = None) -> str:
             f" found in config"
         )
     return config.endpoints[endpoint_name].model
+
+
+def unusable_reason(*, endpoint: EndpointConfig) -> str | None:
+    """
+    Say why get_client cannot build a client for this endpoint, or
+    return None when it can.
+
+    Routing calls this to skip a candidate before choosing it, so it
+    asks the questions get_client asks without doing the work:
+    find_spec looks for the anthropic SDK rather than importing it,
+    keeping the deferred-import promise above for a group that merely
+    lists an anthropic endpoint. The two can still differ for an SDK
+    that is present but broken, which get_client then reports.
+    get_client raises its own fuller messages instead of these, since
+    it is answering a caller who named the endpoint deliberately.
+    """
+    if endpoint.provider == "anthropic":
+        try:
+            found = (
+                importlib.util.find_spec("anthropic") is not None
+            )
+        except (AttributeError, ImportError, ValueError):
+            found = False
+        if not found:
+            return "the anthropic SDK is not installed"
+    if endpoint.provider == "azure" and not endpoint.base_url:
+        return "no base_url is declared"
+    if not endpoint.api_key_available:
+        return f"{endpoint.api_key_env} is not set"
+    return None

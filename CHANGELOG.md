@@ -16,9 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     counts only, so its rows carry no `usage_details`.
   - route groups: a `route_groups:` block naming candidate endpoints
     and a strategy, `cheapest` or `priority`, plus
-    `LLMConfig.get_route_group()`, `RouteGroupConfig` and
-    `RouteStrategy`. The config layer only; nothing selects a
-    candidate yet.
+    `send_message(route_group=...)`, `route()` for the same choice
+    without a request, and the `groups` and `route` CLI commands.
+    A routed call adds `route_group`, `route_project`,
+    `route_strategy` and `route_endpoint` to its rows. New names:
+    `route`, `RouteDecision`, `RouteGroupConfig`, `RouteStrategy`,
+    `RoutingError`, `LLMConfig.get_route_group()` and
+    `UsageTracker.project_id`. Selection only; no failover.
   - `UsageTracker.log_error(usage=...)`, recording the tokens a call
     consumed before it failed. Written only when the counts are
     non-zero, so an ordinary failure carries no usage block.
@@ -48,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the call proceeds.
   - `load_config()` raised the underlying YAML or Pydantic error for
     an invalid config. Every failure is now a `ConfigError`.
+  - a failed ledger write while recording a failed call replaced the
+    provider's exception. It is logged and the provider's error is
+    raised as it stands, matching the Pydantic AI model.
 
 ## [0.2.2] - 2026-08-26
 

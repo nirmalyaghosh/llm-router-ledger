@@ -87,6 +87,15 @@ class RateLimitedError(ProviderError):
     """
 
 
+class RoutingError(LLMCallError):
+    """
+    Raised when a route group carries no candidate that can be
+    called, because every one was skipped for an unverified provider
+    or for a reason client_factory.unusable_reason gives, such as an
+    API key that is not set.
+    """
+
+
 class UsageTrackerError(LLMCallError):
     """
     Raised when the usage tracker cannot write to its JSONL log (e.g.

@@ -449,6 +449,11 @@ class RouteGroupConfig(BaseModel):
     every one of them to declare a cost. notes is free text for
     whoever edits the config.
 
+    name and project are filled in from the two YAML keys the group
+    sits under, so a group always knows where it was declared and
+    routing does not have to work it out again. Neither may be set in
+    the group body.
+
     The model is frozen and candidates is a tuple, so assigning to a
     field raises. The mappings holding the groups are ordinary dicts,
     so this guards a slip inside one group rather than the config as
@@ -458,6 +463,7 @@ class RouteGroupConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str = ""
+    project: str = ""
     candidates: tuple[str, ...] = ()
     strategy: RouteStrategy = "priority"
     notes: str | None = None
@@ -473,7 +479,8 @@ def _build_route_groups(
 
     Every level must be a mapping with string keys, a project or group
     name must not be blank or padded, a group name must not collide
-    with an endpoint name, a group must not set its own name, it must
+    with an endpoint name, a group must not set its own name or
+    project, it must
     name at least one candidate and must not name the same one twice,
     every candidate must name an endpoint the config declares, and
     every candidate of a cheapest group must declare a cost, since a
@@ -540,12 +547,13 @@ def _build_route_groups(
             )
             if data.get("candidates", ()) is None:
                 data = {**data, "candidates": ()}
-            if "name" in data:
-                raise ConfigError(
-                    f"Route group '{name}' in project"
-                    f" '{project}' must not set 'name'. The group"
-                    f" name comes from the YAML key."
-                )
+            for key in ("name", "project"):
+                if key in data:
+                    raise ConfigError(
+                        f"Route group '{name}' in project"
+                        f" '{project}' must not set '{key}'. It"
+                        f" comes from the YAML key it sits under."
+                    )
             if name in endpoints:
                 raise ConfigError(
                     f"Route group '{name}' in project"
@@ -555,6 +563,7 @@ def _build_route_groups(
             try:
                 group = RouteGroupConfig(
                     name=name,
+                    project=project,
                     **data,
                 )
             except ValidationError as exc:

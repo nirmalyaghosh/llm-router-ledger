@@ -128,6 +128,15 @@ class UsageTracker:
         return self
 
     @property
+    def project_id(self) -> str:
+        """
+        The project this tracker stamps on every event. send_message
+        reads it to decide which set of route groups to resolve a
+        group name against.
+        """
+        return self._project_id
+
+    @property
     def run_id(self) -> str:
         """
         The current run identifier (8-char uuid4 prefix). Stamped as the
@@ -291,6 +300,10 @@ class UsageTracker:
         provider: str = "",
         modality: str = "text",
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> str:
         """
         Write an llm_request event. Returns the request_id (run_id +
@@ -305,6 +318,16 @@ class UsageTracker:
         The key is written only when it is not "text", so text entries
         keep the exact shape they had before the field existed and a
         reader may treat an absent modality as text.
+
+        route_group, route_project, route_strategy and route_endpoint
+        are written only for a call that went through a route group:
+        the group, the project it resolved through, its strategy, and
+        the endpoint it chose. The endpoint matters because two
+        candidates in one group can share a provider and a model, so
+        nothing else in the row identifies which one answered. A call
+        that named its endpoint directly carries none of the four, so
+        existing rows are unchanged. log_error and log_response take
+        the same four and mirror the paired request.
         """
         self._counter += 1
         width = self._counter_width
@@ -342,6 +365,14 @@ class UsageTracker:
             entry["modality"] = modality
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
         return request_id
 
@@ -358,6 +389,10 @@ class UsageTracker:
         modality: str = "text",
         usage: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> None:
         """
         Write an llm_error event for a call that raised.
@@ -420,6 +455,14 @@ class UsageTracker:
             entry["usage_details"] = usage_details
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
 
     def log_response(
@@ -437,6 +480,10 @@ class UsageTracker:
             dict[str, Any] | None
         ) = None,
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> None:
         """
         Write an llm_response event. The generation_id is auto-routed to
@@ -508,6 +555,14 @@ class UsageTracker:
             )
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
 
     def record_request(

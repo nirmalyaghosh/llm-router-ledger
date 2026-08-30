@@ -247,6 +247,11 @@ _ROUTE_GROUP_CASES = {
         "      candidates: [paid-one]\n",
         "must not set 'name'",
     ),
+    "group sets its own project": (
+        _GROUP + "      project: elsewhere\n"
+        "      candidates: [paid-one]\n",
+        "must not set 'project'",
+    ),
     "name collides with endpoint": (
         "route_groups:\n  default:\n    paid-one:\n"
         "      candidates: [paid-one]\n",

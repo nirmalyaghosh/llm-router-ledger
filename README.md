@@ -182,8 +182,7 @@ endpoints:
 
 ## Route groups
 
-A route group names a set of candidate endpoints and the strategy for
-choosing between them.
+A route group names a set of candidate endpoints and the strategy for choosing between them, so a call can ask for a purpose rather than an endpoint.
 
 ```yaml
 route_groups:
@@ -201,42 +200,92 @@ route_groups:
 ```
 
 ```python
-from llm_router_ledger import load_config
-
-config = load_config("llm_endpoints.yaml")
-group = config.get_route_group(project="reporting", name="low-cost")
-print(group.strategy, group.candidates)
+result = send_message(
+    route_group="low-cost",
+    user="hello",
+    tracker=tracker,
+)
 ```
 
-The first level is the project, matching the `project_id` on the
-tracker. `default` holds the groups every project inherits, and a
-project's own group of the same name wins. A project that declares
-some groups of its own still inherits the rest.
+The group is resolved, a candidate is chosen, and the call goes out to whichever endpoint won.
 
-`strategy` records how candidates should be chosen. It defaults to
-`priority`, and nothing acts on it yet, so today it decides only
-whether every candidate must declare a cost.
+### Strategies
 
-| Strategy | Recorded intent | Needs a cost block |
+| Strategy | Chooses | Needs a cost block |
 |---|---|---|
-| `cheapest` | compare candidates on their declared rate, zero being free | yes, on every candidate |
-| `priority` | take the candidates in the order listed | no |
+| `cheapest` | the lowest declared input plus output rate, ties by list order | yes, on every candidate |
+| `priority` | the first candidate in the list | no |
 
-`notes` is free text for whoever edits the config.
+`strategy` defaults to `priority`. `notes` is free text for whoever edits the config.
 
-A group is rejected when the config loads if it sets its own `name`,
-takes the name of an endpoint, names no candidates, names the same
-candidate twice, names an endpoint the config does not declare, or,
-under `cheapest`, names a candidate with no cost block.
+### Unusable candidates are skipped before the strategy runs
 
-A rate belongs to the upstream serving a model rather than to the
-model itself, so a declared rate is an estimate that reconciliation
-may contradict.
+A candidate is skipped when it is one the library could not call anyway: its provider has no verified adapter, the environment variable holding its API key is unset, an `azure` endpoint declares no `base_url`, or an `anthropic` endpoint's optional SDK is not installed. The last three are the conditions `get_client()` enforces, asked by `client_factory.unusable_reason()`, which routing calls and `tests/unit/test_client_factory.py` checks against `get_client()` for each of them. The anthropic check looks for the SDK rather than importing it, so `route()` stays cheap for a group that merely lists an anthropic endpoint; an SDK that is installed but broken is reported by `get_client()` instead.
 
-The config layer validates and stores a group and nothing more.
-Nothing selects a candidate or calls one yet: `send_message()` still
-takes `endpoint_name`, and the caller reads `group.candidates` and
-chooses. Selection, failover and the CLI commands are not built.
+This happens before the choice rather than at call time because the dispatcher resolves the client before it writes any ledger row, so an unusable candidate would otherwise fail leaving no trace of the call at all, and under `priority` it would take down a group that has a working candidate behind it. A group with nothing usable left raises `RoutingError`.
+
+### Seeing the decision without making a call
+
+`route()` applies the same logic and returns without sending anything, so it costs no tokens.
+
+```python
+from llm_router_ledger import route
+
+decision = route(name="quick")
+print(decision.endpoint_name, decision.chosen_by)
+print(decision.skipped)
+```
+
+The same from the command line:
+
+```
+$ llm-router-ledger route --group low-cost
+low-cost -> openrouter-nemotron-3.5-lightning-free
+  project:  default
+  strategy: cheapest
+  reason:   cheapest of 2 usable candidates
+```
+
+A candidate you cannot reach is listed under the choice with the reason, for example `skipped local-lmstudio: LMSTUDIO_API_KEY is not set`.
+
+`llm-router-ledger groups` lists every group with its strategy and candidates.
+
+### Projects
+
+The first level is the project. `default` holds the groups every project inherits, and the fallback is per group, so a project that declares one group of its own still inherits the rest.
+
+```yaml
+route_groups:
+  default:
+    low-cost: {...}
+    quick: {...}
+  reporting:
+    quick: {...}       # wins here; low-cost still inherited
+```
+
+`send_message()` reads the `default` project unless you pass `project=`. It is never inferred from the tracker's `project_id`, which is a free-text ledger label rather than a config section, so adding a `route_groups:` section cannot silently change where an existing call goes. Passing `project=` with `endpoint_name=` raises `ValueError`.
+
+### What the ledger records
+
+A routed call adds four keys to its request, response and error rows: `route_group`, `route_project`, `route_strategy` and `route_endpoint`. All four are plain values to query on; nothing has to be parsed.
+
+`route_endpoint` is the endpoint the group chose. It is the one that makes a routed row reconcilable, because two candidates in a group can share a provider and a model string, and then nothing else in the row says which of them answered. `route_project` is the project the group was read from, which matters when two projects define a group of the same name.
+
+`RouteDecision.chosen_by` is a phrase for a person, such as `cheapest of 3 usable candidates`. It is not written to the ledger, since it says nothing the four fields do not.
+
+A call that names its endpoint directly writes none of the four, so existing rows are unchanged.
+
+### Rules a config must follow
+
+A group is rejected when the config loads if it sets its own `name` or `project`, takes the name of an endpoint, names no candidates, names the same candidate twice, names an endpoint the config does not declare, or, under `cheapest`, names a candidate with no cost block.
+
+### A declared rate is an estimate
+
+`cheapest` compares declared rates, and a rate belongs to the upstream serving a model rather than to the model itself. The same OpenRouter slug can span an order of magnitude across upstreams, so the ranking is an estimate that reconciliation against the ledger may contradict.
+
+### There is no failover
+
+A chosen endpoint that returns 401 or 429 raises exactly as it would if you had named it. Nothing retries the next candidate, and nothing remembers that a candidate just failed.
 
 ## Mirroring usage elsewhere
 
@@ -405,6 +454,7 @@ with purpose_scope("query-planning"):
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
 - Previews are redacted by default: `system_prompt_preview`, `user_prompt_preview`, and `response_preview` are written as `"[REDACTED]"` when the underlying text is non-empty, `""` when it genuinely is empty. Pass `preview_length` (a positive character count) to `UsageTracker()` to opt in to storing a truncated preview instead; the length and token counts are always recorded either way.
 - A failed call writes an `llm_error` event sharing the `request_id` of its `llm_request`, carrying `error_type` (the original SDK exception's class name), `error_message`, and `status_code` where the provider returned one. A third event type rather than an `llm_response` with an error field, because a failed call has no tokens and writing zeroes would corrupt anyone summing them. The SDK retries internally before raising, so one `llm_error` stands for however many attempts it made.
+- A call made through a route group carries four more top-level fields on all three events: `route_group`, `route_project` (the project the group was read from, which is `default` when a project inherits it), `route_strategy`, and `route_endpoint` (the endpoint the group chose). The endpoint matters because two candidates in one group can share a provider and a model string, so nothing else in the row says which answered. A call that named its endpoint writes none of the four, so existing rows are unchanged.
 - `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
   - **Embedding calls**: `dimensions` and `embedding_count` always, plus `cost`, `is_byok` and `upstream_provider` where available.
 
@@ -445,10 +495,15 @@ Exactly one of the two fields is populated per `llm_response` event; queries tha
 
 ```bash
 llm-router-ledger list                          # show configured endpoints
+llm-router-ledger groups                        # show route groups
 llm-router-ledger validate llm_endpoints.yaml   # validate the YAML
 llm-router-ledger stale --days 30               # endpoints with stale pricing
+llm-router-ledger route --group low-cost        # which endpoint a group would choose
 llm-router-ledger chat --endpoint openrouter-mimo-v2.5 --system "You are concise." --user "Hello." --log-path logs/usage.jsonl --project-id my-project
+llm-router-ledger chat --route-group low-cost --system "You are concise." --user "Hello."
 ```
+
+`route` makes no request. `chat` takes `--endpoint` or `--route-group`, not both, and `--project` only applies alongside `--route-group`.
 
 ## Env vars
 

@@ -14,12 +14,17 @@ import copy
 from typing import Any
 
 from llm_router_ledger._errors import wrap_provider_exception
+from llm_router_ledger._logger import get_logger
 from llm_router_ledger._messages import (
     build_messages,
     extract_system_text,
     extract_text,
 )
 from llm_router_ledger._usage import split_usage
+from llm_router_ledger._verified import (
+    VERIFIED_EMBEDDING_PROVIDERS,
+    VERIFIED_PROVIDERS,
+)
 from llm_router_ledger.client_factory import (
     get_client,
     get_model_name,
@@ -47,28 +52,64 @@ from llm_router_ledger.results import (
     ChatResult,
     EmbeddingResult,
 )
+from llm_router_ledger.routing import (
+    RouteDecision,
+    route,
+)
 from llm_router_ledger.usage_tracker import UsageTracker
 
 
-_VERIFIED_EMBEDDING_PROVIDERS = frozenset({
-    "lmstudio",
-    "ollama",
-    "openrouter",
-})
+logger = get_logger(__name__)
 
-_VERIFIED_PROVIDERS = frozenset({
-    "anthropic",
-    "azure",
-    "deepseek",
-    "lmstudio",
-    "minimax",
-    "nvidia",
-    "ollama",
-    "openai",
-    "openrouter",
-    "qwen",
-    "zhipu",
-})
+
+def _log_error_quietly(
+    *,
+    tracker: UsageTracker,
+    request_id: str,
+    model: str,
+    error_type: str,
+    error_message: str,
+    status_code: int | None,
+    purpose: str,
+    provider: str,
+    metadata: dict[str, Any] | None,
+    modality: str = "text",
+    route_group: str = "",
+    route_project: str = "",
+    route_strategy: str = "",
+    route_endpoint: str = "",
+) -> None:
+    """
+    Helper function used to write an llm_error row without letting a
+    failed write replace the provider's exception, which is the one
+    the caller needs to see.
+
+    The parameters are spelled out rather than collected, so mypy
+    checks each call site against log_error and a renamed field is a
+    type error rather than a row that silently goes missing.
+    """
+    try:
+        tracker.log_error(
+            request_id=request_id,
+            model=model,
+            error_type=error_type,
+            error_message=error_message,
+            status_code=status_code,
+            purpose=purpose,
+            provider=provider,
+            modality=modality,
+            metadata=metadata,
+            route_group=route_group,
+            route_project=route_project,
+            route_strategy=route_strategy,
+            route_endpoint=route_endpoint,
+        )
+    except Exception:
+        logger.warning(
+            "Could not record the failed call; the provider's"
+            " error is raised as it stands",
+            exc_info=True,
+        )
 
 
 def _resolve_endpoint(
@@ -149,11 +190,11 @@ def _select_adapter(provider: str) -> ProviderAdapter:
     """
     Helper function used to pick the provider adapter for a given provider
     name. Raises NotImplementedError for providers whose adapter has not
-    been verified end-to-end in this release (anything outside the
-    _VERIFIED_PROVIDERS set above).
+    been verified end-to-end in this release (anything outside
+    VERIFIED_PROVIDERS).
     """
-    if provider not in _VERIFIED_PROVIDERS:
-        verified = ", ".join(sorted(_VERIFIED_PROVIDERS))
+    if provider not in VERIFIED_PROVIDERS:
+        verified = ", ".join(sorted(VERIFIED_PROVIDERS))
         raise NotImplementedError(
             f"The '{provider}' adapter is deferred to a later minor"
             f" release. Verified providers in this release: {verified}."
@@ -171,8 +212,8 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     provider name.
 
     Embedding verification is tracked separately from text, in
-    _VERIFIED_EMBEDDING_PROVIDERS, because a working chat adapter says
-    nothing about embeddings: most providers in _VERIFIED_PROVIDERS
+    VERIFIED_EMBEDDING_PROVIDERS, because a working chat adapter says
+    nothing about embeddings: most providers in VERIFIED_PROVIDERS
     serve no embedding models at all, and the rest were not exercised
     end-to-end in this release.
 
@@ -183,9 +224,9 @@ def _select_embedding_adapter(provider: str) -> EmbeddingAdapter:
     no token count. Nothing is billed either way, so there is no
     invoice to reconcile against.
     """
-    if provider not in _VERIFIED_EMBEDDING_PROVIDERS:
+    if provider not in VERIFIED_EMBEDDING_PROVIDERS:
         verified = ", ".join(
-            sorted(_VERIFIED_EMBEDDING_PROVIDERS),
+            sorted(VERIFIED_EMBEDDING_PROVIDERS),
         )
         raise NotImplementedError(
             f"Embeddings are not available for the '{provider}'"
@@ -279,7 +320,8 @@ def create_embeddings(
     except Exception as exc:
         wrapped = wrap_provider_exception(exc, endpoint_name)
         if tracker is not None:
-            tracker.log_error(
+            _log_error_quietly(
+                tracker=tracker,
                 request_id=request_id,
                 model=model,
                 error_type=type(exc).__name__,
@@ -326,7 +368,9 @@ def create_embeddings(
 
 def send_message(
     *,
-    endpoint_name: str,
+    endpoint_name: str | None = None,
+    route_group: str | None = None,
+    project: str | None = None,
     user: str | None = None,
     system: str | None = None,
     messages: list[dict[str, Any]] | None = None,
@@ -356,6 +400,15 @@ def send_message(
     When tracker is provided, paired llm_request and llm_response events
     are appended to its JSONL log. When tracker is None, no logging
     happens.
+
+    endpoint_name and route_group are alternatives; pass exactly one.
+    route_group resolves the named group through routing.route(),
+    which skips a candidate whose provider has no verified adapter or
+    whose API key is unset, then applies the group's strategy. The
+    group, the project, the strategy and the chosen endpoint are
+    stamped on the ledger rows. project selects which set of groups
+    to read and defaults to "default"; passing it without a
+    route_group raises ValueError.
 
     system + user is the single-turn convenience form; system is
     optional, pass None for user-only calls (common with JSON-mode
@@ -387,6 +440,33 @@ def send_message(
     NotImplementedError if the endpoint's provider has no verified chat
     adapter, and ValueError if neither messages nor user is supplied.
     """
+    if endpoint_name is not None and route_group is not None:
+        raise ValueError(
+            "send_message takes either 'endpoint_name' or"
+            " 'route_group', not both"
+        )
+    if project is not None and route_group is None:
+        raise ValueError(
+            "send_message only uses 'project' to resolve a"
+            " 'route_group'"
+        )
+    decision: RouteDecision | None = None
+    if route_group is not None:
+        if config is None:
+            config = load_config()
+        decision = route(
+            config=config,
+            name=route_group,
+            project=(
+                "default" if project is None else project
+            ),
+        )
+        endpoint_name = decision.endpoint_name
+    if endpoint_name is None:
+        raise ValueError(
+            "send_message requires either 'endpoint_name' or"
+            " 'route_group'"
+        )
     config, ep = _resolve_endpoint(
         config=config,
         endpoint_name=endpoint_name,
@@ -429,6 +509,20 @@ def send_message(
             purpose=purpose,
             provider=ep.provider,
             metadata=metadata,
+            route_group=(
+                "" if decision is None else decision.group
+            ),
+            route_project=(
+                "" if decision is None else decision.project
+            ),
+            route_strategy=(
+                "" if decision is None else decision.strategy
+            ),
+            route_endpoint=(
+                ""
+                if decision is None
+                else decision.endpoint_name
+            ),
         )
 
     try:
@@ -446,7 +540,8 @@ def send_message(
     except Exception as exc:
         wrapped = wrap_provider_exception(exc, endpoint_name)
         if tracker is not None:
-            tracker.log_error(
+            _log_error_quietly(
+                tracker=tracker,
                 request_id=request_id,
                 model=model,
                 error_type=type(exc).__name__,
@@ -457,6 +552,24 @@ def send_message(
                 purpose=purpose,
                 provider=ep.provider,
                 metadata=metadata,
+                route_group=(
+                    "" if decision is None else decision.group
+                ),
+                route_project=(
+                    ""
+                    if decision is None
+                    else decision.project
+                ),
+                route_strategy=(
+                    ""
+                    if decision is None
+                    else decision.strategy
+                ),
+                route_endpoint=(
+                    ""
+                    if decision is None
+                    else decision.endpoint_name
+                ),
             )
         if wrapped is exc:
             raise
@@ -476,6 +589,20 @@ def send_message(
             provider=ep.provider,
             usage_details=usage_details,
             metadata=metadata,
+            route_group=(
+                "" if decision is None else decision.group
+            ),
+            route_project=(
+                "" if decision is None else decision.project
+            ),
+            route_strategy=(
+                "" if decision is None else decision.strategy
+            ),
+            route_endpoint=(
+                ""
+                if decision is None
+                else decision.endpoint_name
+            ),
         )
 
     return ChatResult(
