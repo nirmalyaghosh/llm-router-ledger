@@ -36,6 +36,7 @@ import os
 import re
 import sys
 
+from contextlib import suppress
 from pathlib import Path
 
 from dotenv import (
@@ -122,6 +123,24 @@ def _merge_small_chunks(
             _join_chunks(first=previous, second=last)
         )
     return merged
+
+
+def _write_atomically(*, path: Path, text: str) -> None:
+    """
+    Helper function used to replace a file in one step.
+
+    A direct write truncates the existing file before the new
+    content arrives, so an interrupted run leaves neither the old
+    corpus nor a complete new one.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        with suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def chunk_markdown(text: str) -> list[dict[str, str]]:
@@ -217,8 +236,9 @@ def main() -> int:
         return 1
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
-        json.dumps(
+    _write_atomically(
+        path=args.out,
+        text=json.dumps(
             {
                 "source": args.source.name,
                 "endpoint": args.endpoint,
@@ -232,7 +252,6 @@ def main() -> int:
             },
             indent=1,
         ),
-        encoding="utf-8",
     )
     print(
         f"wrote {args.out} "
