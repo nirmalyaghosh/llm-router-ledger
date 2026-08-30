@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the `openai` upper bound is `<4`, was `<3`, which the
     `[pydantic-ai]` extra requires. The API surface this package uses
     is unchanged across the major.
+- Removed:
+  - positional unpacking of `ChatResult` and `EmbeddingResult`.
+    Both are now frozen dataclasses rather than `NamedTuple`
+    subclasses; unpacking raises `TypeError`. Use attribute access
+    (`.text`, `.vectors`, `.usage`, `.generation_id`).
 - Fixed:
   - a failed ledger write in the Pydantic AI model could replace the
     provider's exception or discard a completed call. It is logged and
