@@ -9,6 +9,8 @@ Public surface:
 - UsageTracker: append-only JSONL logger, with record_request,
   record_response, and record_run for calls the library did not make.
 - purpose_scope: set the purpose an agent framework cannot pass.
+- integrations.pydantic_ai.ledger_model: a Pydantic AI model that
+  records every call it makes; needs the [pydantic-ai] extra.
 - load_config, LLMConfig: YAML config + types.
 - Exceptions rooted at LLMCallError.
 """

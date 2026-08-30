@@ -256,7 +256,65 @@ duck typing, so this costs no dependency on pydantic-ai.
   inherit it. Use a purpose scope where per-call purpose matters.
 - A run that raises produces no rows at all, unlike `send_message()`,
   which logs the request before making the call. Both are correct, but
-  it changes what an unpaired `llm_request` means.
+  it changes what an unpaired `llm_request` means. `ledger_model()`
+  below does log the request first, so it records a failed call.
+
+## Recording a Pydantic AI agent automatically
+
+`record_run()` needs a second call and only sees a finished run.
+`ledger_model()` builds the model for an endpoint in
+`llm_endpoints.yaml` and wraps it, so the agent records itself:
+
+```python
+from pydantic_ai import Agent
+
+from llm_router_ledger.integrations.pydantic_ai import ledger_model
+
+model = ledger_model("openrouter-mimo-v2.5", tracker=tracker)
+agent = Agent(model, instructions="Answer briefly.")
+result = await agent.run("...")
+```
+
+Needs the extra: `uv pip install llm-router-ledger[pydantic-ai]`.
+
+The endpoint's `provider`, `model`, `base_url`, `api_key_env`,
+`extra_body`, `timeout_seconds` and `max_retries` all apply, so the
+agent talks to the endpoint on the same terms `send_message()` would,
+and the rows carry the endpoint's own provider rather than the
+framework's.
+
+For a successful run the two paths write the same rows. Prefer this one
+unless the model is not yours to build, because it also:
+
+- records a call that raised, as an `llm_error` pairing the
+  `llm_request` written before the call, exactly as `send_message()`
+  does. A run that raises never reaches `record_run()`.
+- resolves `purpose` per call rather than once per run, so a
+  `purpose_scope` entered inside a run is honoured.
+- covers streaming. Usage is not final until a stream ends, so the
+  response event is written once it is exhausted; a stream cut short
+  still records the tokens it spent.
+
+`purpose` and `metadata` can also bind for the life of the model:
+
+```python
+model = ledger_model(
+    "openrouter-mimo-v2.5",
+    tracker=tracker,
+    purpose="query-planning",
+    metadata={"experiment": "a"},
+)
+```
+
+An active purpose scope overrides the bound `purpose`, which is how one
+model shared by several agents keeps them apart in the ledger.
+
+The cost limitation above applies here too: the framework keeps only
+integer usage fields, so a provider's reported cost never reaches these
+rows either. Reconcile by response id.
+
+See `examples/agentic_rag/posthoc.py` and `ledger_model.py`, which run
+the same five-agent pipeline through each option.
 
 ## Setting a purpose an agent cannot pass
 

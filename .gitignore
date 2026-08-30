@@ -34,6 +34,8 @@ Thumbs.db
 logs/
 logs/*.jsonl
 
+examples/agentic_rag/corpus/prepared.json*
+
 llm_endpoints.yaml
 
 uv.lock
