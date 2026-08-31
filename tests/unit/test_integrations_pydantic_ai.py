@@ -770,17 +770,238 @@ def test_an_ordinary_failure_carries_no_usage_block(
     assert "usage" not in events[-1]
 
 
+def test_a_scope_entered_mid_stream_does_not_split_the_pair(
+    tmp_log_path: Path,
+) -> None:
+    """
+    A streamed call writes its response row when the stream closes,
+    arbitrarily later than the request row. The purpose resolved when
+    the call started is the one both rows carry, so a scope entered
+    while the stream is being consumed cannot split them.
+    """
+    tracker = _tracker(tmp_log_path)
+
+    async def stream(
+        messages: list[Any],
+        info: AgentInfo,
+    ) -> Any:
+        for chunk in ("hel", "lo"):
+            yield chunk
+
+    agent = Agent(_wrap(tracker, FunctionModel(stream_function=stream)))
+
+    async def drive() -> None:
+        async with agent.run_stream("hello") as result:
+            with purpose_scope("entered-mid-call"):
+                async for _ in result.stream_text():
+                    pass
+
+    asyncio.run(drive())
+    tracker.close()
+
+    events = _events(tmp_log_path)
+    assert [e["event"] for e in events] == [
+        "llm_request",
+        "llm_response",
+    ]
+    assert events[0]["purpose"] == events[1]["purpose"]
+
+
+class _Renaming(WrapperModel):
+    """
+    Helper class used to rename the reply after the wrapped model has
+    returned it, the way a provider answering with a dated snapshot
+    or a substituted upstream does. FunctionModel stamps its own name
+    on the way out, so renaming inside it would not survive.
+    """
+
+    async def request(self, *args: Any, **kwargs: Any) -> Any:
+        """
+        Return the wrapped model's reply under another model name.
+        """
+        response = await super().request(*args, **kwargs)
+        response.model_name = "provider-named-something-else"
+        return response
+
+
+def test_both_rows_name_the_configured_model(
+    tmp_log_path: Path,
+) -> None:
+    """
+    The response row records the endpoint's model rather than the one
+    the provider named in its reply, so a dated snapshot or a
+    substituted upstream cannot split the pair.
+    """
+    tracker = _tracker(tmp_log_path)
+    model = _replies(
+        ModelResponse(
+            parts=[TextPart("hello")],
+            usage=RequestUsage(input_tokens=5, output_tokens=2),
+        ),
+    )
+    agent = Agent(_wrap(tracker, _Renaming(model)))
+    agent.run_sync("hi")
+    tracker.close()
+
+    events = _events(tmp_log_path)
+    assert events[0]["model"] == events[1]["model"]
+    assert "provider-named" not in events[1]["model"]
+
+
+def test_a_substituted_model_is_recorded(
+    tmp_log_path: Path,
+) -> None:
+    """
+    The configured model stays on both rows, and the one the provider
+    named is kept alongside it, so a substitution is still visible.
+    """
+    tracker = _tracker(tmp_log_path)
+    model = _replies(
+        ModelResponse(
+            parts=[TextPart("hello")],
+            usage=RequestUsage(input_tokens=5, output_tokens=2),
+        ),
+    )
+    agent = Agent(_wrap(tracker, _Renaming(model)))
+    agent.run_sync("hi")
+    tracker.close()
+
+    response = _events(tmp_log_path)[1]
+    assert response["usage_details"]["response_model"] == (
+        "provider-named-something-else"
+    )
+
+
+def test_a_scope_left_mid_call_does_not_split_the_pair(
+    tmp_log_path: Path,
+) -> None:
+    """
+    The mirror of the case above. A scope active when the call starts
+    is the one both rows carry, even when the caller leaves it before
+    the stream closes and the response row is written.
+    """
+    tracker = _tracker(tmp_log_path)
+
+    async def stream(
+        messages: list[Any],
+        info: AgentInfo,
+    ) -> Any:
+        for chunk in ("hel", "lo"):
+            yield chunk
+
+    model = _wrap(tracker, FunctionModel(stream_function=stream))
+
+    async def drive() -> None:
+        scope = purpose_scope("at-request")
+        scope.__enter__()
+        async with model.request_stream(
+            [],
+            None,
+            ModelRequestParameters(),
+        ) as streamed:
+            async for _ in streamed:
+                pass
+            scope.__exit__(None, None, None)
+
+    asyncio.run(drive())
+    tracker.close()
+
+    events = _events(tmp_log_path)
+    assert [e["event"] for e in events] == [
+        "llm_request",
+        "llm_response",
+    ]
+    assert events[0]["purpose"] == "at-request"
+    assert events[1]["purpose"] == "at-request"
+
+
+def test_an_error_row_carries_the_request_time_purpose(
+    tmp_log_path: Path,
+) -> None:
+    """
+    A failed call records the purpose the call started under, not
+    whatever the caller has moved on to by the time the stream
+    breaks.
+    """
+    tracker = _tracker(tmp_log_path)
+
+    async def stream(
+        messages: list[Any],
+        info: AgentInfo,
+    ) -> Any:
+        yield "partial"
+        raise RuntimeError("upstream cut the connection")
+
+    model = _wrap(tracker, FunctionModel(stream_function=stream))
+
+    async def drive() -> None:
+        moved_on = purpose_scope("caller-moved-on")
+        with purpose_scope("at-request"):
+            try:
+                async with model.request_stream(
+                    [],
+                    None,
+                    ModelRequestParameters(),
+                ) as streamed:
+                    moved_on.__enter__()
+                    async for _ in streamed:
+                        pass
+            finally:
+                moved_on.__exit__(None, None, None)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(drive())
+    tracker.close()
+
+    events = _events(tmp_log_path)
+    assert [e["event"] for e in events] == [
+        "llm_request",
+        "llm_error",
+    ]
+    assert events[1]["purpose"] == "at-request"
+
+
+def test_an_unverified_provider_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A provider with no verified adapter raises the same error
+    send_message raises, rather than quietly building a client that
+    cannot work.
+    """
+    monkeypatch.setenv("PAI_KEY", "set")
+    p = tmp_path / "unverified.yaml"
+    p.write_text(
+        "endpoints:\n"
+        "  gemini-one:\n"
+        "    provider: gemini\n"
+        "    model: gemini-2.0-flash\n"
+        "    api_key_env: PAI_KEY\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(NotImplementedError, match="deferred"):
+        ledger_model(
+            endpoint_name="gemini-one",
+            tracker=_tracker(tmp_path / "usage.jsonl"),
+            config=load_config(p),
+        )
+
+
 def test_both_paths_write_the_same_rows(
     tmp_log_path: Path,
 ) -> None:
     """
-    ledger_model and record_run produce identical rows for a successful
-    run. A consumer can move between them without the ledger changing
-    shape.
+    ledger_model and record_run produce the same rows for a successful
+    run, so a consumer can move between them without the ledger
+    changing shape.
+
+    model is compared separately below rather than here: the two paths
+    populate it differently by design, and a stub model that echoes
+    the name it was asked for would hide that.
     """
     fields = (
         "event",
-        "model",
         "provider",
         "purpose",
         "system_prompt_preview",
@@ -847,6 +1068,50 @@ def test_both_paths_write_the_same_rows(
 
     assert comparable(wrapped_path) == comparable(
         recorded_path,
+    )
+
+
+def test_the_two_paths_differ_only_on_the_model_field(
+    tmp_log_path: Path,
+) -> None:
+    """
+    Against a provider that answers with a different model than it was
+    asked for, ledger_model records the configured one and keeps the
+    provider's under usage_details.response_model, while record_run
+    records the provider's directly and keeps nothing beside it.
+
+    This is the difference the parity test above excludes, asserted
+    here so neither side can drift unnoticed.
+    """
+    wrapped_path = tmp_log_path.parent / "wrapped.jsonl"
+    wrapped_tracker = _tracker(wrapped_path)
+    agent = Agent(
+        _wrap(
+            wrapped_tracker,
+            _Renaming(_replies(_text_reply("hello"))),
+        ),
+    )
+    agent.run_sync("hi")
+    wrapped_tracker.close()
+
+    recorded_path = tmp_log_path.parent / "recorded.jsonl"
+    recorded_tracker = _tracker(recorded_path)
+    plain = Agent(_Renaming(_replies(_text_reply("hello"))))
+    result = plain.run_sync("hi")
+    recorded_tracker.record_run(result.all_messages())
+    recorded_tracker.close()
+
+    wrapped = _events(wrapped_path)[1]
+    recorded = _events(recorded_path)[1]
+
+    assert "provider-named" not in wrapped["model"]
+    assert wrapped["usage_details"]["response_model"] == (
+        "provider-named-something-else"
+    )
+    assert recorded["model"] == "provider-named-something-else"
+    assert "response_model" not in recorded.get(
+        "usage_details",
+        {},
     )
 
 

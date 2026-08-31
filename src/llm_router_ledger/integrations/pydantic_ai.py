@@ -12,9 +12,12 @@ send_message writes:
     agent = Agent(model)
 
 The alternative is UsageTracker.record_run(), which records after the
-fact. Both produce the same rows for a successful run. This one also
-records a call that raised, resolves purpose per call, and covers
-streaming.
+fact. For a successful run the two write the same rows but for model:
+this one writes the endpoint's configured model and keeps the one the
+provider named under usage_details.response_model, while record_run
+has no config to compare against and writes the provider's name
+directly. This one also records a call that raised, resolves purpose
+per call, and covers streaming.
 
 Wraps the built model rather than injecting a client, so the same
 wrapper covers non-OpenAI backends. The endpoint's own provider is
@@ -35,6 +38,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from llm_router_ledger._logger import get_logger
+from llm_router_ledger._verified import VERIFIED_PROVIDERS
 from llm_router_ledger._run_messages import (
     latest_user_prompt,
     response_text,
@@ -50,7 +54,10 @@ from llm_router_ledger.exceptions import (
     ConfigError,
     EndpointNotFoundError,
 )
-from llm_router_ledger.purpose import current_purpose
+from llm_router_ledger.purpose import (
+    current_purpose,
+    purpose_scope,
+)
 from llm_router_ledger.usage_tracker import UsageTracker
 
 
@@ -84,7 +91,20 @@ def _build_model(
     The SDK client is constructed here rather than left to Pydantic AI's
     environment lookup. api_key_env, base_url, timeout_seconds and
     max_retries then apply as they do to get_client().
+
+    A provider with no verified adapter is refused with the same error
+    _select_adapter raises, so an endpoint the dispatcher will not call
+    is not quietly reachable through an agent instead.
     """
+    if endpoint.provider not in VERIFIED_PROVIDERS:
+        verified = ", ".join(sorted(VERIFIED_PROVIDERS))
+        raise NotImplementedError(
+            f"The '{endpoint.provider}' adapter is deferred to a"
+            f" later minor release. Verified providers in this"
+            f" release: {verified}. Use OpenRouter as a workaround"
+            f" to reach most model families."
+        )
+
     if endpoint.provider == "anthropic":
         try:
             from anthropic import AsyncAnthropic
@@ -205,6 +225,12 @@ class _LedgerModel(WrapperModel):
         construction, which is what lets several agents share one model and
         still land in different rows. With neither set, None defers to the
         tracker's default_purpose.
+
+        Called once per call, at the start, and the result is carried to
+        the response or error row. Reading it again later would let a
+        scope entered or left mid-call split a pair across two purposes,
+        which a streamed call leaves wide open: its response row is
+        written when the stream closes, arbitrarily later.
         """
         return current_purpose() or self._purpose or None
 
@@ -213,6 +239,8 @@ class _LedgerModel(WrapperModel):
         request_id: str,
         exc: BaseException,
         usage: dict[str, Any] | None = None,
+        *,
+        purpose: str | None,
     ) -> None:
         """
         Helper function used to write the llm_error event for one failed
@@ -220,23 +248,28 @@ class _LedgerModel(WrapperModel):
 
         The write is guarded. A tracker that cannot write must not replace
         the provider's exception with its own. Follows UsageTracker._notify.
+
+        The ambient purpose is pinned to the request-time value first,
+        because UsageTracker consults the scope itself whenever the
+        purpose passed in is empty.
         """
         try:
-            self._tracker.log_error(
-                request_id=request_id,
-                model=self.model_name,
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-                status_code=getattr(
-                    exc,
-                    "status_code",
-                    None,
-                ),
-                purpose=self._resolve_purpose(),
-                provider=self._provider_name,
-                usage=usage,
-                metadata=self._metadata,
-            )
+            with purpose_scope(purpose or ""):
+                self._tracker.log_error(
+                    request_id=request_id,
+                    model=self.model_name,
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    status_code=getattr(
+                        exc,
+                        "status_code",
+                        None,
+                    ),
+                    purpose=purpose,
+                    provider=self._provider_name,
+                    usage=usage,
+                    metadata=self._metadata,
+                )
         except Exception:
             logger.warning(
                 "Could not record a failed call; it"
@@ -244,7 +277,12 @@ class _LedgerModel(WrapperModel):
                 exc_info=True,
             )
 
-    def _log_request(self, messages: list[Any]) -> str:
+    def _log_request(
+        self,
+        messages: list[Any],
+        *,
+        purpose: str | None,
+    ) -> str:
         """
         Helper function used to write the llm_request event for one call and
         return its id.
@@ -266,7 +304,7 @@ class _LedgerModel(WrapperModel):
         return self._tracker.record_request(
             model=self.model_name,
             provider=self._provider_name,
-            purpose=self._resolve_purpose(),
+            purpose=purpose,
             system_prompt=prompt,
             user_prompt=user,
             metadata=self._metadata,
@@ -276,6 +314,8 @@ class _LedgerModel(WrapperModel):
         self,
         request_id: str,
         response: Any,
+        *,
+        purpose: str | None,
     ) -> None:
         """
         Helper function used to write the llm_response event pairing one
@@ -290,7 +330,12 @@ class _LedgerModel(WrapperModel):
         and a fault here belongs to this package rather than the provider.
         """
         try:
-            self._log_response_unguarded(request_id, response)
+            with purpose_scope(purpose or ""):
+                self._log_response_unguarded(
+                    request_id,
+                    response,
+                    purpose=purpose,
+                )
         except Exception:
             logger.warning(
                 "Could not record a completed call; it"
@@ -302,6 +347,8 @@ class _LedgerModel(WrapperModel):
         self,
         request_id: str,
         response: Any,
+        *,
+        purpose: str | None,
     ) -> None:
         """
         Helper function used to write the llm_response event, letting a
@@ -309,14 +356,26 @@ class _LedgerModel(WrapperModel):
 
         Separated from the guard above. This composes the event; the caller
         decides what a write failure means.
+
+        model is the configured endpoint's model, matching the paired
+        request row and what send_message writes, rather than the model
+        the provider named in its reply. A provider that answers with a
+        dated snapshot or a substituted upstream would otherwise split
+        the pair; what it named is kept as usage_details.response_model
+        instead, so the substitution is still visible.
+
+        The caller pins the ambient purpose to the request-time value
+        before calling this, because UsageTracker consults the scope
+        itself whenever the purpose passed in is empty.
         """
+        usage = response_usage(response)
+        served = getattr(response, "model_name", None)
+        if isinstance(served, str) and served != self.model_name:
+            usage["response_model"] = served
         self._tracker.record_response(
             request_id=request_id,
-            model=(
-                getattr(response, "model_name", "")
-                or self.model_name
-            ),
-            usage=response_usage(response),
+            model=self.model_name,
+            usage=usage,
             response_id=(
                 getattr(
                     response,
@@ -327,7 +386,7 @@ class _LedgerModel(WrapperModel):
             ),
             response_text=response_text(response),
             provider=self._provider_name,
-            purpose=self._resolve_purpose(),
+            purpose=purpose,
             metadata=self._metadata,
         )
 
@@ -335,6 +394,8 @@ class _LedgerModel(WrapperModel):
         self,
         request_id: str,
         stream: StreamedResponse,
+        *,
+        purpose: str | None,
     ) -> None:
         """
         Helper function used to write the llm_response event for one
@@ -353,7 +414,11 @@ class _LedgerModel(WrapperModel):
                 exc_info=True,
             )
             return
-        self._log_response(request_id, response)
+        self._log_response(
+            request_id,
+            response,
+            purpose=purpose,
+        )
 
     async def request(
         self,
@@ -361,7 +426,11 @@ class _LedgerModel(WrapperModel):
         model_settings: Any,
         model_request_parameters: ModelRequestParameters,
     ) -> Any:
-        request_id = self._log_request(messages)
+        purpose = self._resolve_purpose()
+        request_id = self._log_request(
+            messages,
+            purpose=purpose,
+        )
         try:
             response = await self.wrapped.request(
                 messages,
@@ -373,9 +442,17 @@ class _LedgerModel(WrapperModel):
             # from it. Cancellation is routine in an agent
             # framework, and catching Exception alone would leave
             # many requests without an outcome.
-            self._log_failure(request_id, exc)
+            self._log_failure(
+                request_id,
+                exc,
+                purpose=purpose,
+            )
             raise
-        self._log_response(request_id, response)
+        self._log_response(
+            request_id,
+            response,
+            purpose=purpose,
+        )
         return response
 
     @asynccontextmanager
@@ -386,7 +463,11 @@ class _LedgerModel(WrapperModel):
         model_request_parameters: ModelRequestParameters,
         run_context: Any = None,
     ) -> AsyncIterator[StreamedResponse]:
-        request_id = self._log_request(messages)
+        purpose = self._resolve_purpose()
+        request_id = self._log_request(
+            messages,
+            purpose=purpose,
+        )
         spent: dict[str, Any] | None = None
         finished: StreamedResponse | None = None
         try:
@@ -403,7 +484,11 @@ class _LedgerModel(WrapperModel):
                     # out of the loop, and recorded the same way. An
                     # llm_error would report a failure that did not
                     # occur.
-                    self._log_stream_response(request_id, stream)
+                    self._log_stream_response(
+                        request_id,
+                        stream,
+                        purpose=purpose,
+                    )
                     raise
                 except BaseException:
                     # Read what the stream produced so the failure
@@ -417,7 +502,12 @@ class _LedgerModel(WrapperModel):
             # leave the request carrying both outcomes.
             raise
         except BaseException as exc:
-            self._log_failure(request_id, exc, spent)
+            self._log_failure(
+                request_id,
+                exc,
+                spent,
+                purpose=purpose,
+            )
             raise
         if finished is None:
             # Reachable only when the wrapped context manager
@@ -435,7 +525,11 @@ class _LedgerModel(WrapperModel):
         # manager closes is then recorded as an error rather than
         # following a response already written. Usage is not final
         # until the stream ends.
-        self._log_stream_response(request_id, finished)
+        self._log_stream_response(
+            request_id,
+            finished,
+            purpose=purpose,
+        )
 
 
 def ledger_model(

@@ -149,9 +149,10 @@ endpoints:
   # NVIDIA NIM, https://integrate.api.nvidia.com/v1. NIM reports
   # prompt, completion and total tokens only: no cost, no upstream
   # provider, and no reasoning or cache breakdown, so rows from these
-  # endpoints carry no usage_details, and no estimated_cost either
-  # since no cost block is declared. All four were smoke-verified on
-  # 2026-08-31.
+  # endpoints carry none of those usage_details keys, and no
+  # estimated_cost either since no cost block is declared. They still
+  # carry the keys the adapter derives rather than reads, such as
+  # finish_reason. All four were smoke-verified on 2026-08-31.
   # nvidia/nemotron-3-nano-omni-30b-a3b-reasoning direct from NVIDIA
   # NIM. Accepts image, audio and video on input; the adapter sends
   # text only.
@@ -550,8 +551,9 @@ endpoints:
 # their declared rate, so every candidate must declare a cost block.
 # strategy defaults to priority.
 #
-# Nothing selects a candidate yet. Read group.candidates and pass the
-# name you want to send_message().
+# send_message(route_group=...) resolves the group and calls the
+# candidate it chooses. route() makes the same choice and returns it
+# without sending anything.
 route_groups:
   default:
     capable:

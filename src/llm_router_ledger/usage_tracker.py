@@ -130,9 +130,12 @@ class UsageTracker:
     @property
     def project_id(self) -> str:
         """
-        The project this tracker stamps on every event. send_message
-        reads it to decide which set of route groups to resolve a
-        group name against.
+        The project this tracker stamps on every event.
+
+        Nothing else reads it. A route group is resolved against the
+        project passed to send_message, which defaults to "default",
+        because a free-text ledger label and a config section are not
+        the same thing and one must not silently select the other.
         """
         return self._project_id
 
@@ -687,8 +690,8 @@ class UsageTracker:
         "openai" for every OpenAI-compatible server, so an unoverridden
         row cannot tell an OpenAI call from a local one.
 
-        Two limits are worth knowing before reconciling against these
-        rows:
+        Some limits are worth knowing before reconciling against
+        these rows:
 
         - A finished message list carries no record of why each call
           was made, so one purpose is stamped across the whole run and
@@ -704,6 +707,13 @@ class UsageTracker:
           locally computed estimated_cost instead. Reconcile these rows
           against the provider's export by response id, which is the
           documented method regardless.
+        - The model recorded is the one the provider named, which may
+          be a dated snapshot or a substituted upstream rather than
+          the model that was asked for. There is no endpoint config
+          here to compare it against, so no usage_details
+          response_model is written either. ledger_model records the
+          configured model instead and keeps the provider's alongside
+          it.
         """
         request_ids: list[str] = []
         system_prompt = ""

@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rows as `record_run()`, and additionally records a call that
     raised, resolves `purpose` per call, and covers streaming.
   - `provider: nvidia` for NVIDIA NIM. Note that NIM reports token
-    counts only, so its rows carry no `usage_details`.
+    counts only, so its rows carry no cost, upstream provider or
+    token-detail keys.
   - route groups: a `route_groups:` block naming candidate endpoints
     and a strategy, `cheapest` or `priority`, plus
     `send_message(route_group=...)`, `route()` for the same choice
@@ -23,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `route`, `RouteDecision`, `RouteGroupConfig`, `RouteStrategy`,
     `RoutingError`, `LLMConfig.get_route_group()` and
     `UsageTracker.project_id`. Selection only; no failover.
+  - `usage_details.response_model`, the model the provider says it
+    answered with, written only when it differs from the one the
+    endpoint asked for, so a dated snapshot or a substituted upstream
+    is visible in the row.
   - `UsageTracker.log_error(usage=...)`, recording the tokens a call
     consumed before it failed. Written only when the counts are
     non-zero, so an ordinary failure carries no usage block.

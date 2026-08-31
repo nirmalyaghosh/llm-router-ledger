@@ -269,6 +269,9 @@ class OpenAICompatAdapter(ProviderAdapter):
         )
         if upstream:
             usage["upstream_provider"] = upstream
+        served = getattr(response, "model", None)
+        if isinstance(served, str) and served != model:
+            usage["response_model"] = served
 
         return text, usage, response.id or ""
 

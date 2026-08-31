@@ -389,10 +389,17 @@ The endpoint's `provider`, `model`, `base_url`, `api_key_env`,
 `extra_body`, `timeout_seconds` and `max_retries` all apply, so the
 agent talks to the endpoint on the same terms `send_message()` would,
 and the rows carry the endpoint's own provider rather than the
-framework's.
+framework's. The exception is `provider: anthropic`, where `base_url`
+and `extra_body` are both dropped, as they are by `send_message()`:
+the Anthropic client is built against the default host and the native
+adapter ignores `extra_body`.
 
-For a successful run the two paths write the same rows. Prefer this one
-unless the model is not yours to build, because it also:
+For a successful run the two paths write the same rows but for `model`.
+This one writes the endpoint's configured model and keeps whatever the
+provider named under `usage_details.response_model`; `record_run()` has
+no endpoint config to compare against, so it writes the provider's name
+in `model` and no `response_model` at all. Prefer this one unless the
+model is not yours to build, because it also:
 
 - records a call that raised, as an `llm_error` pairing the
   `llm_request` written before the call, exactly as `send_message()`
@@ -454,6 +461,7 @@ with purpose_scope("query-planning"):
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
 - Previews are redacted by default: `system_prompt_preview`, `user_prompt_preview`, and `response_preview` are written as `"[REDACTED]"` when the underlying text is non-empty, `""` when it genuinely is empty. Pass `preview_length` (a positive character count) to `UsageTracker()` to opt in to storing a truncated preview instead; the length and token counts are always recorded either way.
 - A failed call writes an `llm_error` event sharing the `request_id` of its `llm_request`, carrying `error_type` (the original SDK exception's class name), `error_message`, and `status_code` where the provider returned one. A third event type rather than an `llm_response` with an error field, because a failed call has no tokens and writing zeroes would corrupt anyone summing them. The SDK retries internally before raising, so one `llm_error` stands for however many attempts it made.
+- `usage_details.response_model` records the model the provider says it answered with, written only when it differs from the endpoint's configured `model`. Its presence means you were served something other than what you asked for: an OpenAI-family dated snapshot, or an OpenRouter upstream substitution. Its absence means the two agreed, or the provider named nothing. The `model` field itself stays the configured one on both rows of a pair, so grouping and joining are unaffected.
 - A call made through a route group carries four more top-level fields on all three events: `route_group`, `route_project` (the project the group was read from, which is `default` when a project inherits it), `route_strategy`, and `route_endpoint` (the endpoint the group chose). The endpoint matters because two candidates in one group can share a provider and a model string, so nothing else in the row says which answered. A call that named its endpoint writes none of the four, so existing rows are unchanged.
 - `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
   - **Embedding calls**: `dimensions` and `embedding_count` always, plus `cost`, `is_byok` and `upstream_provider` where available.
@@ -466,6 +474,7 @@ Chat calls map provider fields onto ledger keys as follows. A key is written onl
 | Anthropic `usage.input_tokens` / `output_tokens` | `usage.prompt_tokens` / `completion_tokens` | Anthropic |
 | `usage.cost`, `usage.is_byok` | `usage_details.cost`, `.is_byok` | OpenRouter |
 | response `provider` | `usage_details.upstream_provider` | OpenRouter |
+| response `model`, when it differs from the one asked for | `usage_details.response_model` | all |
 | `completion_tokens_details.reasoning_tokens` | `usage_details.completion_reasoning_tokens` | OpenRouter, Qwen, Zhipu |
 | `prompt_tokens_details.cached_tokens` | `usage_details.prompt_cached_tokens` | OpenRouter, DeepSeek, Zhipu |
 | other keys in either `*_tokens_details` block | same name, `completion_` / `prompt_` prefixed | varies |
