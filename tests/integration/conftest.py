@@ -2,8 +2,14 @@
 Integration-tier fixtures and skip logic.
 
 Any test under tests/integration/ marked @pytest.mark.integration is
-auto-skipped when OPENROUTER_API_KEY is not set in the environment, so a
-default `pytest` run does no real API calls.
+skipped unless LRL_RUN_INTEGRATION is set, so a default `pytest` run
+makes no real API calls.
+
+The skip hook read OPENROUTER_API_KEY until 0.3.0. That stopped
+working in 0.2.2, when .env resolution moved to the working
+directory: importing the library loads .env, so by the time this
+hook runs the key is always set and the tests always ran. An
+explicit opt-in cannot be turned on as a side effect of an import.
 """
 
 from __future__ import annotations
@@ -18,14 +24,17 @@ def pytest_collection_modifyitems(
     items: list[pytest.Item],
 ) -> None:
     """
-    Add a skip marker to every integration test in this dir tree when
-    the required API key is absent. Tests already marked with a different
+    Add a skip marker to every integration test in this dir tree
+    unless the opt-in is set. Tests already marked with a different
     skip reason are left alone.
     """
-    if os.environ.get("OPENROUTER_API_KEY"):
+    if os.environ.get("LRL_RUN_INTEGRATION"):
         return
     skip = pytest.mark.skip(
-        reason="OPENROUTER_API_KEY not set; skipping integration tests",
+        reason=(
+            "LRL_RUN_INTEGRATION not set; skipping integration"
+            " tests, which make billed API calls"
+        ),
     )
     for item in items:
         if "integration" in item.keywords:

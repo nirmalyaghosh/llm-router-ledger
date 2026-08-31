@@ -1,13 +1,14 @@
 """
 Integration tests against a real OpenRouter endpoint.
 
-These tests issue paid API calls and require OPENROUTER_API_KEY in the
-environment. The conftest in this directory auto-skips them when the env
-var is unset, so a default `pytest` run does nothing real.
+These tests issue paid API calls. They are skipped unless
+LRL_RUN_INTEGRATION is set, so a default `pytest` run does nothing
+real. They also need OPENROUTER_API_KEY, which a .env in the working
+directory supplies.
 
 Run explicitly:
 
-    pytest -m integration tests/integration
+    LRL_RUN_INTEGRATION=1 pytest -m integration tests/integration
 """
 
 from __future__ import annotations

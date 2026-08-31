@@ -105,5 +105,5 @@ files = ["src/llm_router_ledger"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: opt-in tests that hit real provider APIs (require API keys; skipped if env unset)",
+    "integration: opt-in tests that hit real, billed provider APIs; skipped unless LRL_RUN_INTEGRATION is set",
 ]
