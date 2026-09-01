@@ -7,7 +7,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "llm-router-ledger"
-version = "0.2.2"
+version = "0.3.0"
 description = "Route text and embedding calls across LLM providers, keeping a JSONL ledger of every request and response for offline cost reconciliation."
 readme = "README.md"
 license = { file = "LICENSE" }
