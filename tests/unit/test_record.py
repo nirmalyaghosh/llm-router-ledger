@@ -696,3 +696,63 @@ def test_record_run_records_no_system_prompt_when_there_is_none(
 
     entries = _read_jsonl(tmp_log_path)
     assert entries[0]["system_prompt_preview"] == ""
+
+
+def test_log_error_carries_the_tokens_a_broken_call_spent(
+    tmp_log_path: Path,
+) -> None:
+    """
+    A stream that broke partway consumed the tokens it had already
+    produced, so they are recorded on the llm_error rather than
+    lost.
+    """
+    tracker = _tracker(tmp_log_path)
+    try:
+        request_id = tracker.record_request(model="m")
+        tracker.log_error(
+            request_id=request_id,
+            model="m",
+            error_type="Dropped",
+            error_message="upstream went away",
+            usage={
+                "prompt_tokens": 12,
+                "completion_tokens": 3,
+                "finish_reason": "error",
+            },
+        )
+    finally:
+        tracker.close()
+
+    error = _read_jsonl(tmp_log_path)[1]
+    assert error["usage"] == {
+        "prompt_tokens": 12,
+        "completion_tokens": 3,
+        "total_tokens": 15,
+    }
+    assert error["usage_details"] == {"finish_reason": "error"}
+
+
+def test_log_error_records_details_without_a_usage_block(
+    tmp_log_path: Path,
+) -> None:
+    """
+    usage_details is gated separately from the token counts, so a
+    failure reporting a finish reason before any token count still
+    records it, while the token block stays absent rather than zeroed.
+    """
+    tracker = _tracker(tmp_log_path)
+    try:
+        request_id = tracker.record_request(model="m")
+        tracker.log_error(
+            request_id=request_id,
+            model="m",
+            error_type="Dropped",
+            error_message="upstream went away",
+            usage={"finish_reason": "error"},
+        )
+    finally:
+        tracker.close()
+
+    error = _read_jsonl(tmp_log_path)[1]
+    assert "usage" not in error
+    assert error["usage_details"] == {"finish_reason": "error"}

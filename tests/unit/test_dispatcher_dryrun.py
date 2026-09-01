@@ -343,6 +343,14 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
             "https://api.minimax.io/v1",
             "chatcmpl-test",
         ),
+        # NVIDIA NIM serves its own OpenAI-compatible API.
+        (
+            "nvidia",
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "NVIDIA_API_KEY",
+            "https://integrate.api.nvidia.com/v1",
+            "chatcmpl-test",
+        ),
         # Ollama speaks the OpenAI chat API locally; uses gen-* style id.
         (
             "ollama",
@@ -381,6 +389,7 @@ def test_send_message_anthropic_dispatches_to_native_adapter(
         "deepseek",
         "lmstudio",
         "minimax",
+        "nvidia",
         "ollama",
         "openai",
         "qwen",

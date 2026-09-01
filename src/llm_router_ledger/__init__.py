@@ -9,7 +9,10 @@ Public surface:
 - UsageTracker: append-only JSONL logger, with record_request,
   record_response, and record_run for calls the library did not make.
 - purpose_scope: set the purpose an agent framework cannot pass.
+- integrations.pydantic_ai.ledger_model: a Pydantic AI model that
+  records every call it makes; needs the [pydantic-ai] extra.
 - load_config, LLMConfig: YAML config + types.
+- route: choose an endpoint from a route group without calling it.
 - Exceptions rooted at LLMCallError.
 """
 
@@ -28,6 +31,8 @@ from llm_router_ledger.config import (
     EndpointConfig,
     LLMConfig,
     ProviderName,
+    RouteGroupConfig,
+    RouteStrategy,
     get_context_window,
     load_config,
 )
@@ -45,6 +50,7 @@ from llm_router_ledger.exceptions import (
     ProviderError,
     ProviderUnavailableError,
     RateLimitedError,
+    RoutingError,
     UsageTrackerError,
 )
 from llm_router_ledger.purpose import (
@@ -54,6 +60,10 @@ from llm_router_ledger.purpose import (
 from llm_router_ledger.results import (
     ChatResult,
     EmbeddingResult,
+)
+from llm_router_ledger.routing import (
+    RouteDecision,
+    route,
 )
 from llm_router_ledger.usage_tracker import (
     UsageTracker,
@@ -83,6 +93,10 @@ __all__ = [
     "ProviderUnavailableError",
     "RateLimitedError",
     "ProviderName",
+    "RouteDecision",
+    "RouteGroupConfig",
+    "RouteStrategy",
+    "RoutingError",
     "UsageTracker",
     "UsageTrackerError",
     "__version__",
@@ -93,5 +107,6 @@ __all__ = [
     "get_model_name",
     "load_config",
     "purpose_scope",
+    "route",
     "send_message",
 ]

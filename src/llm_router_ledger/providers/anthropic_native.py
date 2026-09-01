@@ -159,5 +159,8 @@ class AnthropicAdapter(ProviderAdapter):
         unmapped = collect_unmapped(raw, _MAPPED_USAGE_KEYS)
         if unmapped:
             usage["unmapped"] = unmapped
+        served = getattr(response, "model", None)
+        if isinstance(served, str) and served != model:
+            usage["response_model"] = served
 
         return text, usage, response.id or ""

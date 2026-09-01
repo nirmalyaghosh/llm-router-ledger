@@ -55,6 +55,7 @@ def _fake_response(
     provider: str | None = None,
     tool_calls: list[SimpleNamespace] | None = None,
     finish_reason: str | None = None,
+    model: str | None = None,
 ) -> SimpleNamespace:
     """
     Helper function used to build a plain response object for the usage-
@@ -84,6 +85,8 @@ def _fake_response(
     }
     if provider is not None:
         kwargs["provider"] = provider
+    if model is not None:
+        kwargs["model"] = model
     return SimpleNamespace(**kwargs)
 
 
@@ -413,3 +416,49 @@ def test_adapter_handles_missing_usage() -> None:
         "completion_tokens": 0,
         "total_tokens": 0,
     }
+
+
+def test_a_substituted_model_is_recorded() -> None:
+    """
+    A provider answering with a model other than the one asked for
+    records it, so a dated snapshot or a substituted upstream is
+    visible in the row rather than lost.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=1,
+        completion_tokens=2,
+        total_tokens=3,
+    )
+    client = _client_returning(
+        _fake_response(
+            usage=usage,
+            model="gpt-4.1-nano-2025-04-14",
+        ),
+    )
+    _text, reported, _id = OpenAICompatAdapter().send(
+        client=client,
+        model="gpt-4.1-nano",
+        messages=[_text_message("user", "hi")],
+    )
+    assert reported["response_model"] == "gpt-4.1-nano-2025-04-14"
+
+
+def test_the_same_model_is_not_recorded_twice() -> None:
+    """
+    A provider answering with the model that was asked for adds
+    nothing, so the key's presence alone means a substitution.
+    """
+    usage = SimpleNamespace(
+        prompt_tokens=1,
+        completion_tokens=2,
+        total_tokens=3,
+    )
+    client = _client_returning(
+        _fake_response(usage=usage, model="gpt-4.1-nano"),
+    )
+    _text, reported, _id = OpenAICompatAdapter().send(
+        client=client,
+        model="gpt-4.1-nano",
+        messages=[_text_message("user", "hi")],
+    )
+    assert "response_model" not in reported

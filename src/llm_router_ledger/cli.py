@@ -2,9 +2,14 @@
 Command-line interface for llm-router-ledger.
 
 Subcommands:
-- chat: ad-hoc single-shot call.
+- chat: ad-hoc single-shot call, to a named
+  endpoint or through a route group.
+- groups: print the route groups with their
+  strategy and candidates.
 - list: print the endpoint table with key
   status, cost, and staleness warnings.
+- route: print which endpoint a route group
+  would choose, without calling it.
 - stale: list endpoints whose pricing has
   not been verified in the last N days.
 - validate: load a YAML config and report any errors.
@@ -23,6 +28,7 @@ from pathlib import Path
 from llm_router_ledger.config import load_config
 from llm_router_ledger.dispatcher import send_message
 from llm_router_ledger.exceptions import LLMCallError
+from llm_router_ledger.routing import route
 from llm_router_ledger.usage_tracker import UsageTracker
 
 
@@ -31,10 +37,10 @@ STALE_THRESHOLD_DAYS = 30
 
 def _cmd_chat(args: argparse.Namespace) -> int:
     """
-    Helper function used to run the chat subcommand: send a system + user
-    message to the named endpoint and print the response text. When
-    --log-path is given, paired llm_request / llm_response events are
-    written to that JSONL file.
+    Helper function used to run the chat subcommand: send a system +
+    user message to the named endpoint, or through a route group, and
+    print the response text. When --log-path is given, paired
+    llm_request / llm_response events are written to that JSONL file.
     """
     tracker: UsageTracker | None = None
     if args.log_path:
@@ -45,6 +51,8 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     try:
         result = send_message(
             endpoint_name=args.endpoint,
+            route_group=args.route_group,
+            project=args.project,
             system=args.system,
             user=args.user,
             tracker=tracker,
@@ -64,6 +72,28 @@ def _cmd_chat(args: argparse.Namespace) -> int:
     finally:
         if tracker is not None:
             tracker.close()
+    return 0
+
+
+def _cmd_groups(args: argparse.Namespace) -> int:
+    """
+    Helper function used to run the groups subcommand: print every
+    route group, by project, with its strategy and candidates.
+    """
+    cfg = load_config()
+    if not cfg.route_groups:
+        print("No route groups configured.")
+        return 0
+    for project in sorted(cfg.route_groups):
+        print(f"{project}:")
+        groups = cfg.route_groups[project]
+        for name in sorted(groups):
+            group = groups[name]
+            print(
+                f"  {name:<20}"
+                f" {group.strategy:<10}"
+                f" {', '.join(group.candidates)}"
+            )
     return 0
 
 
@@ -118,6 +148,25 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_route(args: argparse.Namespace) -> int:
+    """
+    Helper function used to run the route subcommand: show which
+    endpoint a group would choose, and why the others were skipped.
+    No request is made, so this costs no tokens.
+    """
+    decision = route(
+        name=args.group,
+        project=args.project,
+    )
+    print(f"{decision.group} -> {decision.endpoint_name}")
+    print(f"  project:  {decision.project}")
+    print(f"  strategy: {decision.strategy}")
+    print(f"  reason:   {decision.chosen_by}")
+    for candidate, reason in decision.skipped.items():
+        print(f"  skipped {candidate}: {reason}")
+    return 0
+
+
 def _cmd_stale(args: argparse.Namespace) -> int:
     """
     Helper function used to run the stale subcommand: list endpoints whose
@@ -162,10 +211,14 @@ def _cmd_validate(args: argparse.Namespace) -> int:
     config at args.path and print a one-line summary.
     """
     cfg = load_config(args.path)
+    group_count = sum(
+        len(groups)
+        for groups in cfg.route_groups.values()
+    )
     print(
         f"OK: {len(cfg.endpoints)}"
         f" endpoint(s),"
-        f" {len(cfg.roles)} role mapping(s)"
+        f" {group_count} route group(s)"
     )
     return 0
 
@@ -194,9 +247,31 @@ def main(argv: list[str] | None = None) -> int:
             "Send a single system+user message."
         ),
     )
-    p_chat.add_argument(
+    p_chat_target = (
+        p_chat.add_mutually_exclusive_group(
+            required=True,
+        )
+    )
+    p_chat_target.add_argument(
         "--endpoint",
-        required=True,
+        default=None,
+        help="Endpoint to call.",
+    )
+    p_chat_target.add_argument(
+        "--route-group",
+        default=None,
+        help=(
+            "Route group to choose an endpoint"
+            " from."
+        ),
+    )
+    p_chat.add_argument(
+        "--project",
+        default=None,
+        help=(
+            "Project whose groups to read. Only"
+            " with --route-group."
+        ),
     )
     p_chat.add_argument(
         "--system",
@@ -224,11 +299,39 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_chat.set_defaults(func=_cmd_chat)
 
+    p_groups = sub.add_parser(
+        "groups",
+        help="Show all route groups.",
+    )
+    p_groups.set_defaults(func=_cmd_groups)
+
     p_list = sub.add_parser(
         "list",
         help="Show all endpoints.",
     )
     p_list.set_defaults(func=_cmd_list)
+
+    p_route = sub.add_parser(
+        "route",
+        help=(
+            "Show which endpoint a route"
+            " group would choose."
+        ),
+    )
+    p_route.add_argument(
+        "--group",
+        required=True,
+        help="Route group to resolve.",
+    )
+    p_route.add_argument(
+        "--project",
+        default="default",
+        help=(
+            "Project whose groups to read"
+            " (default: default)."
+        ),
+    )
+    p_route.set_defaults(func=_cmd_route)
 
     p_stale = sub.add_parser(
         "stale",
@@ -256,6 +359,14 @@ def main(argv: list[str] | None = None) -> int:
     p_val.set_defaults(func=_cmd_validate)
 
     args = parser.parse_args(argv)
+    if (
+        args.command == "chat"
+        and args.project is not None
+        and args.route_group is None
+    ):
+        parser.error(
+            "--project only applies with --route-group",
+        )
     try:
         exit_code: int = args.func(args)
         return exit_code

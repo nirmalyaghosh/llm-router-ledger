@@ -31,9 +31,13 @@ from pathlib import Path
 from typing import Any
 
 from llm_router_ledger._logger import get_logger
+from llm_router_ledger._run_messages import (
+    latest_user_prompt,
+    response_text,
+    response_usage,
+    system_prompt as read_system_prompt,
+)
 from llm_router_ledger._usage import (
-    ORDINARY_FINISH_REASONS,
-    map_request_usage,
     normalise_token_keys,
     split_usage,
 )
@@ -45,117 +49,6 @@ logger = get_logger(__name__)
 
 
 Subscriber = Callable[[dict[str, Any]], None]
-
-
-def _count_tool_calls(message: Any) -> int:
-    """
-    Helper function used to count the tool calls in one model response,
-    so a turn that returned only tool calls does not read as an empty
-    response in the ledger. Mirrors completion_tool_call_count as the
-    OpenAI-compatible adapter writes it.
-
-    Counts the ordinary tool call part only. A framework's own
-    provider-side call parts, e.g. a hosted web search, carry their own
-    discriminators and are not counted, so this is a floor rather than
-    an exact total for a run that uses them.
-    """
-    return sum(
-        1
-        for part in getattr(message, "parts", ())
-        if getattr(part, "part_kind", None) == "tool-call"
-    )
-
-
-def _finish_reason(message: Any) -> str:
-    """
-    Helper function used to read the finish reason off one model
-    response, in the provider's own vocabulary, or "" for a turn that
-    ran to completion.
-
-    The provider's word for it is preferred over the framework's
-    normalised one, because both adapters record the raw value and a
-    reconciler filtering on finish_reason must not have to know that
-    the same truncated turn is "tool_calls" from one path and
-    "tool_call" from the other. Pydantic AI keeps the raw value in
-    provider_details and exposes the normalised one on the message, so
-    the raw value is there to be preferred.
-    """
-    details = getattr(message, "provider_details", None)
-    raw = (
-        details.get("finish_reason")
-        if isinstance(details, dict)
-        else None
-    )
-    reason = raw or getattr(message, "finish_reason", None)
-    if not reason or reason in ORDINARY_FINISH_REASONS:
-        return ""
-    return str(reason)
-
-
-def _latest_user_prompt(message: Any) -> str:
-    """
-    Helper function used to pull the last user prompt out of one model
-    request, for the request event's preview and character count. Tool
-    returns and system prompts are skipped: the dispatcher previews the
-    latest user message, and this follows it.
-
-    Returns "" for a request carrying no user prompt, e.g. the tool
-    return that continues a tool loop, and for a multimodal prompt
-    whose content is not a plain string.
-    """
-    latest = ""
-    for part in getattr(message, "parts", ()):
-        if getattr(part, "part_kind", None) != "user-prompt":
-            continue
-        content = getattr(part, "content", "")
-        if isinstance(content, str):
-            latest = content
-    return latest
-
-
-def _response_text(message: Any) -> str:
-    """
-    Helper function used to join the text parts of one model response,
-    for the response event's preview and character count.
-
-    Thinking parts are excluded: they are not the answer, and their
-    tokens are already accounted for under
-    completion_reasoning_tokens. A turn that returned only tool calls
-    yields "", the same as the adapter records for it.
-    """
-    return "".join(
-        part.content
-        for part in getattr(message, "parts", ())
-        if getattr(part, "part_kind", None) == "text"
-        and isinstance(getattr(part, "content", None), str)
-    )
-
-
-def _system_prompt(message: Any) -> str:
-    """
-    Helper function used to read the system prompt off one model
-    request, for the request event's preview.
-
-    Two shapes carry it, and both are read. An agent given
-    instructions= puts them on every request, including the tool
-    returns that continue a loop. An agent given system_prompt= puts a
-    system prompt part on the first request only, but that request is
-    resent as history on every later call, so the prompt is on the wire
-    for all of them either way.
-
-    Returns "" for a request carrying neither, which is why the caller
-    treats a result as sticky rather than clearing what it already
-    holds.
-    """
-    instructions = getattr(message, "instructions", None)
-    if isinstance(instructions, str) and instructions:
-        return instructions
-    return "".join(
-        part.content
-        for part in getattr(message, "parts", ())
-        if getattr(part, "part_kind", None) == "system-prompt"
-        and isinstance(getattr(part, "content", None), str)
-    )
 
 
 class UsageTracker:
@@ -233,6 +126,18 @@ class UsageTracker:
 
     def __enter__(self) -> UsageTracker:
         return self
+
+    @property
+    def project_id(self) -> str:
+        """
+        The project this tracker stamps on every event.
+
+        Nothing else reads it. A route group is resolved against the
+        project passed to send_message, which defaults to "default",
+        because a free-text ledger label and a config section are not
+        the same thing and one must not silently select the other.
+        """
+        return self._project_id
 
     @property
     def run_id(self) -> str:
@@ -398,6 +303,10 @@ class UsageTracker:
         provider: str = "",
         modality: str = "text",
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> str:
         """
         Write an llm_request event. Returns the request_id (run_id +
@@ -412,6 +321,16 @@ class UsageTracker:
         The key is written only when it is not "text", so text entries
         keep the exact shape they had before the field existed and a
         reader may treat an absent modality as text.
+
+        route_group, route_project, route_strategy and route_endpoint
+        are written only for a call that went through a route group:
+        the group, the project it resolved through, its strategy, and
+        the endpoint it chose. The endpoint matters because two
+        candidates in one group can share a provider and a model, so
+        nothing else in the row identifies which one answered. A call
+        that named its endpoint directly carries none of the four, so
+        existing rows are unchanged. log_error and log_response take
+        the same four and mirror the paired request.
         """
         self._counter += 1
         width = self._counter_width
@@ -449,6 +368,14 @@ class UsageTracker:
             entry["modality"] = modality
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
         return request_id
 
@@ -463,7 +390,12 @@ class UsageTracker:
         purpose: str | None = None,
         provider: str = "",
         modality: str = "text",
+        usage: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> None:
         """
         Write an llm_error event for a call that raised.
@@ -471,8 +403,18 @@ class UsageTracker:
         Shares request_id with the llm_request that preceded it, so a
         failure pairs the same way a success does and no request is left
         orphaned. A third event type rather than an llm_response with an
-        error field: a failed call produced no tokens, and writing zeroes
-        into usage would corrupt anyone summing them.
+        error field: an ordinary failure produced no tokens, and writing
+        zeroes into usage would corrupt anyone summing them.
+
+        usage is the exception: a stream that broke partway consumed
+        the tokens it produced, and those are billed regardless.
+        Supply the provider's mapping as reported; it is split as a
+        response's is.
+
+        The usage block is written only when the counts are non-zero,
+        so an ordinary failure carries none and llm_error rows remain
+        safe to sum. Non-token keys go to usage_details
+        independently, since nothing aggregates that field.
 
         error_type is the original exception's class name, kept because
         the wrapped class the caller sees is coarser than what the SDK
@@ -505,8 +447,25 @@ class UsageTracker:
             entry["provider"] = provider
         if modality != "text":
             entry["modality"] = modality
+        token_usage, usage_details = split_usage(
+            normalise_token_keys(usage or {}),
+        )
+        if any(token_usage.values()):
+            entry["usage"] = token_usage
+        # Gated separately: usage_details holds no token counts, so
+        # nothing aggregates it.
+        if usage_details:
+            entry["usage_details"] = usage_details
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
 
     def log_response(
@@ -524,6 +483,10 @@ class UsageTracker:
             dict[str, Any] | None
         ) = None,
         metadata: dict[str, Any] | None = None,
+        route_group: str = "",
+        route_project: str = "",
+        route_strategy: str = "",
+        route_endpoint: str = "",
     ) -> None:
         """
         Write an llm_response event. The generation_id is auto-routed to
@@ -595,6 +558,14 @@ class UsageTracker:
             )
         if metadata:
             entry["metadata"] = metadata
+        if route_group:
+            entry["route_group"] = route_group
+        if route_project:
+            entry["route_project"] = route_project
+        if route_strategy:
+            entry["route_strategy"] = route_strategy
+        if route_endpoint:
+            entry["route_endpoint"] = route_endpoint
         self._write_entry(entry)
 
     def record_request(
@@ -719,8 +690,8 @@ class UsageTracker:
         "openai" for every OpenAI-compatible server, so an unoverridden
         row cannot tell an OpenAI call from a local one.
 
-        Two limits are worth knowing before reconciling against these
-        rows:
+        Some limits are worth knowing before reconciling against
+        these rows:
 
         - A finished message list carries no record of why each call
           was made, so one purpose is stamped across the whole run and
@@ -736,6 +707,13 @@ class UsageTracker:
           locally computed estimated_cost instead. Reconcile these rows
           against the provider's export by response id, which is the
           documented method regardless.
+        - The model recorded is the one the provider named, which may
+          be a dated snapshot or a substituted upstream rather than
+          the model that was asked for. There is no endpoint config
+          here to compare it against, so no usage_details
+          response_model is written either. ledger_model records the
+          configured model instead and keeps the provider's alongside
+          it.
         """
         request_ids: list[str] = []
         system_prompt = ""
@@ -743,9 +721,10 @@ class UsageTracker:
         for message in messages:
             kind = getattr(message, "kind", None)
             if kind == "request":
-                user_prompt = _latest_user_prompt(message)
+                user_prompt = latest_user_prompt(message)
                 system_prompt = (
-                    _system_prompt(message) or system_prompt
+                    read_system_prompt(message)
+                    or system_prompt
                 )
                 continue
             if kind != "response":
@@ -764,17 +743,7 @@ class UsageTracker:
                 user_prompt=user_prompt,
                 metadata=metadata,
             )
-            usage = map_request_usage(
-                getattr(message, "usage", None),
-            )
-            finish_reason = _finish_reason(message)
-            if finish_reason:
-                usage["finish_reason"] = finish_reason
-            tool_calls = _count_tool_calls(message)
-            if tool_calls:
-                usage["completion_tool_call_count"] = (
-                    tool_calls
-                )
+            usage = response_usage(message)
             self.record_response(
                 request_id=request_id,
                 model=model,
@@ -787,7 +756,7 @@ class UsageTracker:
                     )
                     or ""
                 ),
-                response_text=_response_text(message),
+                response_text=response_text(message),
                 provider=stamped_provider,
                 purpose=purpose,
                 metadata=metadata,

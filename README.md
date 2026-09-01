@@ -9,13 +9,14 @@ request and response for offline cost reconciliation.
 | Status | Adapter | Providers |
 |---|---|---|
 | Supported | direct | Anthropic |
-| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
+| Supported | OpenAI-compat | Azure OpenAI, DeepSeek, Local LM Studio, Local Ollama, MiniMax, NVIDIA NIM, OpenAI, OpenRouter, Qwen, Zhipu / GLM |
 | Supported | via OpenRouter | ByteDance Seed, InclusionAI Ling, Nvidia Nemotron, Xiaomi MiMo |
 | Planned | direct | Gemini |
 
 - Every "Supported" row is live-smoke-verified end-to-end.
 - Anthropic requires the optional `[anthropic]` extra: `uv pip install llm-router-ledger[anthropic]`.
 - For the "via OpenRouter" families, use `provider: openrouter` with the appropriate model id.
+- Nemotron is reachable both ways. `provider: nvidia` goes direct to NIM, which reports token counts only; `provider: openrouter` reports cost and upstream and is the route to reconcile against.
 - The table above is about text. Embeddings are gated separately and verified on OpenRouter, Ollama and LM Studio only; see [Embeddings](#embeddings).
 
 ### Free chat models
@@ -179,6 +180,113 @@ endpoints:
 - An `extra_body` passed to `send_message()` replaces the endpoint's value outright. The two layers are not merged, so a caller that wants both must combine them itself. An opaque vendor passthrough carries no merge rules to memorise as a result.
 - **Known limitation:** `provider: anthropic` ignores `extra_body`, so the field has no effect there. `provider: openrouter` reaches Claude with `extra_body` intact.
 
+## Route groups
+
+A route group names a set of candidate endpoints and the strategy for choosing between them, so a call can ask for a purpose rather than an endpoint.
+
+```yaml
+route_groups:
+  default:
+    low-cost:
+      strategy: cheapest
+      candidates:
+        - openrouter-nemotron-3.5-lightning-free
+        - openrouter-ling-3.0-flash
+    quick:
+      strategy: priority
+      candidates:
+        - local-llama
+        - local-lmstudio
+```
+
+```python
+result = send_message(
+    route_group="low-cost",
+    user="hello",
+    tracker=tracker,
+)
+```
+
+The group is resolved, a candidate is chosen, and the call goes out to whichever endpoint won.
+
+### Strategies
+
+| Strategy | Chooses | Needs a cost block |
+|---|---|---|
+| `cheapest` | the lowest declared input plus output rate, ties by list order | yes, on every candidate |
+| `priority` | the first candidate in the list | no |
+
+`strategy` defaults to `priority`. `notes` is free text for whoever edits the config.
+
+### Unusable candidates are skipped before the strategy runs
+
+A candidate is skipped when it is one the library could not call anyway: its provider has no verified adapter, the environment variable holding its API key is unset, an `azure` endpoint declares no `base_url`, or an `anthropic` endpoint's optional SDK is not installed. The last three are the conditions `get_client()` enforces, asked by `client_factory.unusable_reason()`, which routing calls and `tests/unit/test_client_factory.py` checks against `get_client()` for each of them. The anthropic check looks for the SDK rather than importing it, so `route()` stays cheap for a group that merely lists an anthropic endpoint; an SDK that is installed but broken is reported by `get_client()` instead.
+
+This happens before the choice rather than at call time because the dispatcher resolves the client before it writes any ledger row, so an unusable candidate would otherwise fail leaving no trace of the call at all, and under `priority` it would take down a group that has a working candidate behind it. A group with nothing usable left raises `RoutingError`.
+
+### Seeing the decision without making a call
+
+`route()` applies the same logic and returns without sending anything, so it costs no tokens.
+
+```python
+from llm_router_ledger import route
+
+decision = route(name="quick")
+print(decision.endpoint_name, decision.chosen_by)
+print(decision.skipped)
+```
+
+The same from the command line:
+
+```
+$ llm-router-ledger route --group low-cost
+low-cost -> openrouter-nemotron-3.5-lightning-free
+  project:  default
+  strategy: cheapest
+  reason:   cheapest of 2 usable candidates
+```
+
+A candidate you cannot reach is listed under the choice with the reason, for example `skipped local-lmstudio: LMSTUDIO_API_KEY is not set`.
+
+`llm-router-ledger groups` lists every group with its strategy and candidates.
+
+### Projects
+
+The first level is the project. `default` holds the groups every project inherits, and the fallback is per group, so a project that declares one group of its own still inherits the rest.
+
+```yaml
+route_groups:
+  default:
+    low-cost: {...}
+    quick: {...}
+  reporting:
+    quick: {...}       # wins here; low-cost still inherited
+```
+
+`send_message()` reads the `default` project unless you pass `project=`. It is never inferred from the tracker's `project_id`, which is a free-text ledger label rather than a config section, so adding a `route_groups:` section cannot silently change where an existing call goes. Passing `project=` with `endpoint_name=` raises `ValueError`.
+
+### What the ledger records
+
+A routed call adds four keys to its request, response and error rows: `route_group`, `route_project`, `route_strategy` and `route_endpoint`. All four are plain values to query on; nothing has to be parsed.
+
+`route_endpoint` is the endpoint the group chose. It is the one that makes a routed row reconcilable, because two candidates in a group can share a provider and a model string, and then nothing else in the row says which of them answered. `route_project` is the project the group was read from, which matters when two projects define a group of the same name.
+
+`RouteDecision.chosen_by` is a phrase for a person, such as `cheapest of 3 usable candidates`. It is not written to the ledger, since it says nothing the four fields do not.
+
+A call that names its endpoint directly writes none of the four, so existing rows are unchanged.
+
+### Rules a config must follow
+
+A group is rejected when the config loads if it sets its own `name` or `project`, takes the name of an endpoint, names no candidates, names the same candidate twice, names an endpoint the config does not declare, or, under `cheapest`, names a candidate with no cost block.
+
+### A declared rate is an estimate
+
+`cheapest` compares declared rates, and a rate belongs to the upstream serving a model rather than to the model itself. The same OpenRouter slug can span an order of magnitude across upstreams, so the ranking is an estimate that reconciliation against the ledger may contradict.
+
+### There is no failover
+
+A chosen endpoint that returns 401 or 429 raises exactly as it would if you had named it. Nothing retries the next candidate, and nothing remembers that a candidate just failed.
+
 ## Mirroring usage elsewhere
 
 `UsageTracker.subscribe()` registers a callback that receives every ledger entry, so usage can be mirrored to another store without this library depending on it:
@@ -256,7 +364,72 @@ duck typing, so this costs no dependency on pydantic-ai.
   inherit it. Use a purpose scope where per-call purpose matters.
 - A run that raises produces no rows at all, unlike `send_message()`,
   which logs the request before making the call. Both are correct, but
-  it changes what an unpaired `llm_request` means.
+  it changes what an unpaired `llm_request` means. `ledger_model()`
+  below does log the request first, so it records a failed call.
+
+## Recording a Pydantic AI agent automatically
+
+`record_run()` needs a second call and only sees a finished run.
+`ledger_model()` builds the model for an endpoint in
+`llm_endpoints.yaml` and wraps it, so the agent records itself:
+
+```python
+from pydantic_ai import Agent
+
+from llm_router_ledger.integrations.pydantic_ai import ledger_model
+
+model = ledger_model("openrouter-mimo-v2.5", tracker=tracker)
+agent = Agent(model, instructions="Answer briefly.")
+result = await agent.run("...")
+```
+
+Needs the extra: `uv pip install llm-router-ledger[pydantic-ai]`.
+
+The endpoint's `provider`, `model`, `base_url`, `api_key_env`,
+`extra_body`, `timeout_seconds` and `max_retries` all apply, so the
+agent talks to the endpoint on the same terms `send_message()` would,
+and the rows carry the endpoint's own provider rather than the
+framework's. The exception is `provider: anthropic`, where `base_url`
+and `extra_body` are both dropped, as they are by `send_message()`:
+the Anthropic client is built against the default host and the native
+adapter ignores `extra_body`.
+
+For a successful run the two paths write the same rows but for `model`.
+This one writes the endpoint's configured model and keeps whatever the
+provider named under `usage_details.response_model`; `record_run()` has
+no endpoint config to compare against, so it writes the provider's name
+in `model` and no `response_model` at all. Prefer this one unless the
+model is not yours to build, because it also:
+
+- records a call that raised, as an `llm_error` pairing the
+  `llm_request` written before the call, exactly as `send_message()`
+  does. A run that raises never reaches `record_run()`.
+- resolves `purpose` per call rather than once per run, so a
+  `purpose_scope` entered inside a run is honoured.
+- covers streaming. Usage is not final until a stream ends, so the
+  response event is written once it is exhausted; a stream cut short
+  still records the tokens it spent.
+
+`purpose` and `metadata` can also bind for the life of the model:
+
+```python
+model = ledger_model(
+    "openrouter-mimo-v2.5",
+    tracker=tracker,
+    purpose="query-planning",
+    metadata={"experiment": "a"},
+)
+```
+
+An active purpose scope overrides the bound `purpose`, which is how one
+model shared by several agents keeps them apart in the ledger.
+
+The cost limitation above applies here too: the framework keeps only
+integer usage fields, so a provider's reported cost never reaches these
+rows either. Reconcile by response id.
+
+See `examples/agentic_rag/posthoc.py` and `ledger_model.py`, which run
+the same five-agent pipeline through each option.
 
 ## Setting a purpose an agent cannot pass
 
@@ -288,6 +461,8 @@ with purpose_scope("query-planning"):
 - The `llm_response` event additionally carries `usage` (with `prompt_tokens`, `completion_tokens`, `total_tokens`) and a response preview.
 - Previews are redacted by default: `system_prompt_preview`, `user_prompt_preview`, and `response_preview` are written as `"[REDACTED]"` when the underlying text is non-empty, `""` when it genuinely is empty. Pass `preview_length` (a positive character count) to `UsageTracker()` to opt in to storing a truncated preview instead; the length and token counts are always recorded either way.
 - A failed call writes an `llm_error` event sharing the `request_id` of its `llm_request`, carrying `error_type` (the original SDK exception's class name), `error_message`, and `status_code` where the provider returned one. A third event type rather than an `llm_response` with an error field, because a failed call has no tokens and writing zeroes would corrupt anyone summing them. The SDK retries internally before raising, so one `llm_error` stands for however many attempts it made.
+- `usage_details.response_model` records the model the provider says it answered with, written only when it differs from the endpoint's configured `model`. Its presence means you were served something other than what you asked for: an OpenAI-family dated snapshot, or an OpenRouter upstream substitution. Its absence means the two agreed, or the provider named nothing. The `model` field itself stays the configured one on both rows of a pair, so grouping and joining are unaffected.
+- A call made through a route group carries four more top-level fields on all three events: `route_group`, `route_project` (the project the group was read from, which is `default` when a project inherits it), `route_strategy`, and `route_endpoint` (the endpoint the group chose). The endpoint matters because two candidates in one group can share a provider and a model string, so nothing else in the row says which answered. A call that named its endpoint writes none of the four, so existing rows are unchanged.
 - `usage_details` on the response holds everything the provider reported beyond the three token keys, written only when non-empty. `usage` keeps the same fixed three-key shape regardless of what lands in `usage_details`, across both modalities.
   - **Embedding calls**: `dimensions` and `embedding_count` always, plus `cost`, `is_byok` and `upstream_provider` where available.
 
@@ -299,6 +474,7 @@ Chat calls map provider fields onto ledger keys as follows. A key is written onl
 | Anthropic `usage.input_tokens` / `output_tokens` | `usage.prompt_tokens` / `completion_tokens` | Anthropic |
 | `usage.cost`, `usage.is_byok` | `usage_details.cost`, `.is_byok` | OpenRouter |
 | response `provider` | `usage_details.upstream_provider` | OpenRouter |
+| response `model`, when it differs from the one asked for | `usage_details.response_model` | all |
 | `completion_tokens_details.reasoning_tokens` | `usage_details.completion_reasoning_tokens` | OpenRouter, Qwen, Zhipu |
 | `prompt_tokens_details.cached_tokens` | `usage_details.prompt_cached_tokens` | OpenRouter, DeepSeek, Zhipu |
 | other keys in either `*_tokens_details` block | same name, `completion_` / `prompt_` prefixed | varies |
@@ -328,10 +504,15 @@ Exactly one of the two fields is populated per `llm_response` event; queries tha
 
 ```bash
 llm-router-ledger list                          # show configured endpoints
+llm-router-ledger groups                        # show route groups
 llm-router-ledger validate llm_endpoints.yaml   # validate the YAML
 llm-router-ledger stale --days 30               # endpoints with stale pricing
+llm-router-ledger route --group low-cost        # which endpoint a group would choose
 llm-router-ledger chat --endpoint openrouter-mimo-v2.5 --system "You are concise." --user "Hello." --log-path logs/usage.jsonl --project-id my-project
+llm-router-ledger chat --route-group low-cost --system "You are concise." --user "Hello."
 ```
+
+`route` makes no request. `chat` takes `--endpoint` or `--route-group`, not both, and `--project` only applies alongside `--route-group`.
 
 ## Env vars
 
