@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-09-02
 
 - Added:
   - `ledger_model()`, behind the new `[pydantic-ai]` extra: a Pydantic
@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - route groups: a `route_groups:` block naming candidate endpoints
     and a strategy, `cheapest` or `priority`, plus
     `send_message(route_group=...)`, `route()` for the same choice
-    without a request, and the `groups` and `route` CLI commands.
+    without a request, the `groups` and `route` CLI commands, and
+    `--route-group` on `chat`.
     A routed call adds `route_group`, `route_project`,
     `route_strategy` and `route_endpoint` to its rows. New names:
     `route`, `RouteDecision`, `RouteGroupConfig`, `RouteStrategy`,
@@ -35,19 +36,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - the `openai` upper bound is `<4`, was `<3`, which the
     `[pydantic-ai]` extra requires. The API surface this package uses
     is unchanged across the major.
-  - `load_config()` rejects files it used to accept: a duplicate key
-    at any level, a file that is not UTF-8, a path that is not a
-    file, an endpoint that sets its own `name`, a blank or padded
-    endpoint name, a zero or negative `context_window`,
-    `embedding_dimensions` or `timeout_seconds`, a number written as
-    a YAML boolean, and a setting name or top-level block the
-    loader does not recognise.
+  - `load_config()` rejects files it used to accept:
+    - a duplicate key at any level
+    - a file that is not UTF-8, or a path that is not a file
+    - an endpoint that sets its own `name`, or a blank or
+      padded endpoint name
+    - a zero or negative `context_window`,
+      `embedding_dimensions` or `timeout_seconds`
+    - a negative `max_retries`
+    - a zero or negative `retry_backoff_factor`
+    - a negative cost rate
+    - a number written as a YAML boolean
+    - a setting name or top-level block the loader does not
+      recognise
+  - `validate` prints "route group(s)" where it printed "role
+    mapping(s)".
 - Removed:
   - positional unpacking of `ChatResult` and `EmbeddingResult`.
     Both are now frozen dataclasses rather than `NamedTuple`
     subclasses; unpacking raises `TypeError`. Use attribute access
     (`.text`, `.vectors`, `.usage`, `.generation_id`).
-  - the `roles:` block and `LLMConfig.get_role_endpoints()`,
+  - the `roles:` block, the `LLMConfig.roles` attribute and
+    `LLMConfig.get_role_endpoints()`,
     deprecated in 0.2.0. Use `route_groups:` and
     `get_route_group()`; a config still carrying `roles:` is
     rejected.
